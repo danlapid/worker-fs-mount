@@ -15,6 +15,11 @@
       "types": "./dist/fs-promises.d.ts",
       "import": "./dist/fs-promises.js",
       "require": "./dist/fs-promises.js"
+    },
+    "./utils": {
+      "types": "./dist/utils.d.ts",
+      "import": "./dist/utils.js",
+      "require": "./dist/utils.js"
     }
   },
   "files": [

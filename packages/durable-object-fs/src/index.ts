@@ -1,7 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
-import { createFsError } from './errors.js';
-import { getBaseName, getParentPath, normalizePath, resolvePath } from './path-utils.js';
+import { createFsError, getBaseName, getParentPath, normalizePath, resolvePath } from 'worker-fs-mount/utils';
 import { type DbEntry, initializeSchema } from './schema.js';
 
 /**

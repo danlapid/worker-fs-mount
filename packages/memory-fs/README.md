@@ -20,31 +20,30 @@ npm install memory-fs worker-fs-mount
 ### 2. Use in your Worker
 
 ```typescript
+import { exports } from 'cloudflare:workers';
 import { MemoryFilesystem } from 'memory-fs';
-import { mount, withMounts } from 'worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';
 
-// Re-export to make available via ctx.exports
+// Re-export to make available via exports
 export { MemoryFilesystem };
 
+// Mount at module level using importable exports
+mount('/mem', exports.MemoryFilesystem);
+
 export default {
-  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    return withMounts(async () => {
-      // Mount the in-memory filesystem
-      mount('/mem', ctx.exports.MemoryFilesystem);
+  async fetch(request: Request): Promise<Response> {
+    // Use standard fs operations
+    await fs.writeFile('/mem/hello.txt', 'Hello, World!');
+    const content = await fs.readFile('/mem/hello.txt', 'utf8');
 
-      // Use standard fs operations
-      await fs.writeFile('/mem/hello.txt', 'Hello, World!');
-      const content = await fs.readFile('/mem/hello.txt', 'utf8');
+    // Create directories
+    await fs.mkdir('/mem/projects/my-app', { recursive: true });
 
-      // Create directories
-      await fs.mkdir('/mem/projects/my-app', { recursive: true });
+    // List directory contents
+    const files = await fs.readdir('/mem/projects');
 
-      // List directory contents
-      const files = await fs.readdir('/mem/projects');
-
-      return new Response(content);
-    });
+    return new Response(content);
   }
 }
 ```

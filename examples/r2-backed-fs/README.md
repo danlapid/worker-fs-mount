@@ -35,14 +35,14 @@ Then open http://localhost:8787 in your browser.
    bucket_name = "my-storage-bucket"
    ```
 
-3. **Mount** the R2 filesystem at a path:
+3. **Mount** the R2 filesystem at module level:
    ```typescript
    import { env } from 'cloudflare:workers';
    import { R2Filesystem } from 'r2-fs';
    import { mount } from 'worker-fs-mount';
    import fs from 'node:fs/promises';
 
-   // Create the filesystem backed by R2 at module level
+   // Mount at module level using importable env
    const r2fs = new R2Filesystem(env.STORAGE);
    mount('/storage', r2fs);
 

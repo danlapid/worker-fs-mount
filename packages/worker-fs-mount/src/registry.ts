@@ -1,5 +1,21 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Mount, MountMatch, WorkerFilesystem } from './types.js';
+import type { WorkerFilesystem } from './types.js';
+
+/**
+ * Internal mount structure.
+ */
+interface Mount {
+  path: string;
+  stub: WorkerFilesystem;
+}
+
+/**
+ * Result of finding a mount for a path.
+ */
+interface MountMatch {
+  mount: Mount;
+  relativePath: string;
+}
 
 /**
  * AsyncLocalStorage for request-scoped mounts.
@@ -190,25 +206,6 @@ export function findMount(path: string): MountMatch | null {
  */
 export function isMounted(path: string): boolean {
   return findMount(path) !== null;
-}
-
-/**
- * Get all active mounts in the current context.
- *
- * @returns Array of mount paths
- */
-export function getMounts(): string[] {
-  const mounts = getMountRegistry();
-  return Array.from(mounts.keys());
-}
-
-/**
- * Clear all mounts in the current context.
- * Primarily for testing.
- */
-export function clearMounts(): void {
-  const mounts = getMountRegistry();
-  mounts.clear();
 }
 
 /**

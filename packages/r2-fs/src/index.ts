@@ -1,6 +1,14 @@
 import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
-import { createFsError } from './errors.js';
-import { getParentPath, normalizePath, pathToKey, resolvePath } from './path-utils.js';
+import { createFsError, getParentPath, normalizePath, resolvePath } from 'worker-fs-mount/utils';
+
+/**
+ * Convert a filesystem path to an R2 key.
+ * R2 keys don't have a leading slash.
+ */
+function pathToKey(path: string): string {
+  const normalized = normalizePath(path);
+  return normalized === '/' ? '' : normalized.slice(1);
+}
 
 /**
  * Metadata stored in R2 customMetadata for each object.

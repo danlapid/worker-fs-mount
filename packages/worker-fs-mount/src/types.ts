@@ -184,19 +184,3 @@ export interface WorkerFilesystem {
    */
   access?(path: string, mode?: number): Promise<void>;
 }
-
-/**
- * Internal mount structure.
- */
-export interface Mount {
-  path: string;
-  stub: WorkerFilesystem;
-}
-
-/**
- * Result of finding a mount for a path.
- */
-export interface MountMatch {
-  mount: Mount;
-  relativePath: string;
-}

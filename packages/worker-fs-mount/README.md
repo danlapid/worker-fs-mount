@@ -30,26 +30,23 @@ This replaces `node:fs/promises` imports with our mount-aware implementation at 
 ## Quick Start
 
 ```typescript
+import { env } from 'cloudflare:workers';
 import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';
 
+// Mount at module level using importable env
+mount('/mnt/storage', env.STORAGE_SERVICE);
+
 export default {
-  async fetch(request, env) {
-    // Mount a service binding as a filesystem
-    const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
+  async fetch(request) {
+    // Standard fs operations are automatically intercepted
+    await fs.writeFile('/mnt/storage/data.json', JSON.stringify({ hello: 'world' }));
+    const content = await fs.readFile('/mnt/storage/data.json', 'utf8');
 
-    try {
-      // Standard fs operations are automatically intercepted
-      await fs.writeFile('/mnt/storage/data.json', JSON.stringify({ hello: 'world' }));
-      const content = await fs.readFile('/mnt/storage/data.json', 'utf8');
+    // Non-mounted paths work normally
+    await fs.readFile('/tmp/local.txt');
 
-      // Non-mounted paths work normally
-      await fs.readFile('/tmp/local.txt');
-
-      return new Response(content);
-    } finally {
-      handle.unmount();
-    }
+    return new Response(content);
   }
 };
 ```
@@ -192,7 +189,7 @@ export class MemoryFS extends WorkerEntrypoint implements WorkerFilesystem {
 }
 ```
 
-For a production implementation backed by R2, KV, or a database, see the examples in `SPEC.md`.
+For production implementations, see the `r2-fs`, `durable-object-fs`, and `memory-fs` packages.
 
 ## API Reference
 
@@ -215,23 +212,29 @@ Unmount a filesystem at the specified path.
 
 Returns `true` if a mount was removed, `false` if nothing was mounted at that path.
 
-### `findMount(path): MountMatch | null`
+### `withMounts(fn): Promise<T>`
 
-Find the mount for a given path.
+Run a function with request-scoped mount isolation. Required for Durable Objects (getting a DO stub is IO). Use when different requests need different mounts (e.g., per-user DOs).
 
-Returns `{ mount, relativePath }` if found, `null` otherwise.
+```typescript
+// Durable Objects require request scope - use withMounts for isolation
+return withMounts(async () => {
+  const userId = getUserId(request);
+  const id = ctx.exports.UserStorage.idFromName(userId);
+  mount('/user', ctx.exports.UserStorage.get(id));
+  // Each request gets its own isolated mount
+});
+```
+
+For R2, KV, service bindings, and same-worker entrypoints, prefer mounting at module level using `import { env, exports } from 'cloudflare:workers'`.
 
 ### `isMounted(path): boolean`
 
 Check if a path is under any mount.
 
-### `getMounts(): string[]`
+### `isInMountContext(): boolean`
 
-Get all active mount paths.
-
-### `clearMounts(): void`
-
-Remove all mounts (useful for testing).
+Check if code is running inside a `withMounts` callback.
 
 ## WorkerFilesystem Interface
 

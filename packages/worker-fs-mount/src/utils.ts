@@ -1,4 +1,44 @@
 /**
+ * Shared utilities for building WorkerFilesystem implementations.
+ */
+
+/**
+ * Error codes used by the filesystem.
+ */
+export type FsErrorCode =
+  | 'ENOENT'
+  | 'EEXIST'
+  | 'EISDIR'
+  | 'ENOTDIR'
+  | 'ENOTEMPTY'
+  | 'EINVAL'
+  | 'ELOOP';
+
+/**
+ * Error messages for each error code.
+ */
+const ERROR_MESSAGES: Record<FsErrorCode, string> = {
+  ENOENT: 'no such file or directory',
+  EEXIST: 'file already exists',
+  EISDIR: 'illegal operation on a directory',
+  ENOTDIR: 'not a directory',
+  ENOTEMPTY: 'directory not empty',
+  EINVAL: 'invalid argument',
+  ELOOP: 'too many symbolic links',
+};
+
+/**
+ * Create a filesystem error with a POSIX-style error code.
+ * @param code - The error code (ENOENT, EEXIST, etc.)
+ * @param path - The path that caused the error
+ * @returns An Error with the formatted message
+ */
+export function createFsError(code: FsErrorCode, path: string): Error {
+  const message = ERROR_MESSAGES[code];
+  return new Error(`${code}: ${message}, '${path}'`);
+}
+
+/**
  * Normalize a path by collapsing multiple slashes and removing trailing slashes.
  * @param path - The path to normalize
  * @returns The normalized path, always starting with /
@@ -51,25 +91,4 @@ export function resolvePath(basePath: string, relativePath: string): string {
     return normalizePath(relativePath);
   }
   return normalizePath(`${basePath}/${relativePath}`);
-}
-
-/**
- * Convert a filesystem path to an R2 key.
- * R2 keys don't have a leading slash.
- * @param path - The filesystem path (e.g., /foo/bar)
- * @returns The R2 key (e.g., foo/bar)
- */
-export function pathToKey(path: string): string {
-  const normalized = normalizePath(path);
-  // Remove leading slash for R2 key
-  return normalized === '/' ? '' : normalized.slice(1);
-}
-
-/**
- * Convert an R2 key to a filesystem path.
- * @param key - The R2 key (e.g., foo/bar)
- * @returns The filesystem path (e.g., /foo/bar)
- */
-export function keyToPath(key: string): string {
-  return `/${key}`;
 }

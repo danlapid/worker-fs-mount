@@ -44,10 +44,10 @@ export { DurableObjectFilesystem };
 
 export default class extends WorkerEntrypoint<Env> {
   async fetch(request: Request) {
-    // Use withMounts for request-scoped mount isolation
+    // Durable Objects require request scope - use withMounts
     return withMounts(async () => {
       // Get a Durable Object instance via ctx.exports (fully typed!)
-      const id = this.ctx.exports.DurableObjectFilesystem.idFromName('user-123');
+      const id = this.ctx.exports.DurableObjectFilesystem.idFromName('shared');
       const stub = this.ctx.exports.DurableObjectFilesystem.get(id);
 
       // Mount the filesystem
@@ -67,6 +67,7 @@ export default class extends WorkerEntrypoint<Env> {
     });
   }
 }
+```
 
 ## Features
 

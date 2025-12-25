@@ -21,6 +21,8 @@ Open http://localhost:8787 to create, edit, and delete files - all persisted in 
 |---------|-------------|
 | [`worker-fs-mount`](./packages/worker-fs-mount) | Main package - drop-in replacement for `node:fs/promises` with mount support |
 | [`durable-object-fs`](./packages/durable-object-fs) | Durable Object implementing a filesystem with SQLite storage |
+| [`r2-fs`](./packages/r2-fs) | R2-backed filesystem for large file storage |
+| [`memory-fs`](./packages/memory-fs) | In-memory filesystem for ephemeral/testing use |
 
 ## Quick Start
 
@@ -38,14 +40,15 @@ Add the alias to your `wrangler.toml`:
 Use it in your worker:
 
 ```typescript
+import { env } from 'cloudflare:workers';
 import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';
 
-export default {
-  async fetch(request, env) {
-    // Mount a service binding as a filesystem
-    mount('/mnt/storage', env.STORAGE_SERVICE);
+// Mount at module level using importable env
+mount('/mnt/storage', env.STORAGE_SERVICE);
 
+export default {
+  async fetch(request) {
     // Standard fs operations work automatically
     await fs.writeFile('/mnt/storage/data.json', JSON.stringify({ hello: 'world' }));
     const content = await fs.readFile('/mnt/storage/data.json', 'utf8');

@@ -1,5 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
+import { createFsError, getParentPath, normalizePath } from 'worker-fs-mount/utils';
 
 /**
  * A file node in the in-memory filesystem.
@@ -39,51 +40,6 @@ type FsNode = FileNode | DirectoryNode | SymlinkNode;
  * The state backing the in-memory filesystem.
  */
 type MemoryFilesystemState = Map<string, FsNode>;
-
-/**
- * Error codes used by the filesystem.
- */
-type FsErrorCode = 'ENOENT' | 'EEXIST' | 'EISDIR' | 'ENOTDIR' | 'ENOTEMPTY' | 'EINVAL' | 'ELOOP';
-
-/**
- * Create a filesystem error with a POSIX-style error code.
- */
-function createFsError(code: FsErrorCode, path: string): Error {
-  const messages: Record<FsErrorCode, string> = {
-    ENOENT: 'no such file or directory',
-    EEXIST: 'file already exists',
-    EISDIR: 'illegal operation on a directory',
-    ENOTDIR: 'not a directory',
-    ENOTEMPTY: 'directory not empty',
-    EINVAL: 'invalid argument',
-    ELOOP: 'too many symbolic links',
-  };
-  return new Error(`${code}: ${messages[code]}, '${path}'`);
-}
-
-/**
- * Normalize a path by collapsing multiple slashes and removing trailing slashes.
- */
-function normalizePath(path: string): string {
-  let normalized = path.replace(/\/+/g, '/');
-  if (normalized !== '/' && normalized.endsWith('/')) {
-    normalized = normalized.slice(0, -1);
-  }
-  if (!normalized.startsWith('/')) {
-    normalized = `/${normalized}`;
-  }
-  return normalized;
-}
-
-/**
- * Get the parent directory path.
- */
-function getParentPath(path: string): string {
-  const normalized = normalizePath(path);
-  const lastSlash = normalized.lastIndexOf('/');
-  if (lastSlash <= 0) return '/';
-  return normalized.slice(0, lastSlash);
-}
 
 /**
  * Create a new, empty filesystem state with just a root directory.

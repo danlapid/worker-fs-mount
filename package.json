@@ -11,6 +11,7 @@
     "test:watch": "pnpm -r --filter=worker-fs-mount-tests run test:watch",
     "do-example": "pnpm run build && pnpm -r --filter=durable-object-backed-fs-example run dev",
     "r2-example": "pnpm run build && pnpm -r --filter=r2-backed-fs-example run dev",
+    "generate-types": "pnpm -r --filter=worker-fs-mount-tests --filter=durable-object-backed-fs-example --filter=r2-backed-fs-example run generate-types",
     "lint": "biome lint .",
     "lint:fix": "biome lint --write .",
     "format": "biome format .",

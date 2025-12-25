@@ -38,12 +38,14 @@ Then open http://localhost:8787 in your browser.
    ```typescript
    import { DurableObjectFilesystem } from 'durable-object-fs';
    import { mount, withMounts } from 'worker-fs-mount';
+   import { WorkerEntrypoint } from 'cloudflare:workers';
    import fs from 'node:fs/promises';
 
    export { DurableObjectFilesystem };
 
    export default class extends WorkerEntrypoint<Env> {
      async fetch(request: Request) {
+       // Durable Objects require request scope - use withMounts
        return withMounts(async () => {
          const id = this.ctx.exports.DurableObjectFilesystem.idFromName('demo');
          const stub = this.ctx.exports.DurableObjectFilesystem.get(id);
