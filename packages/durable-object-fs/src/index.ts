@@ -112,28 +112,12 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
     };
   }
 
-  async setLastModified(path: string, mtime: Date): Promise<void> {
-    this.ensureInitialized();
+  // === Streaming Operations ===
 
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'id'>>('SELECT id FROM entries WHERE path = ?', normalized)
-      .toArray();
-
-    if (result.length === 0) {
-      throw createFsError('ENOENT', path);
-    }
-
-    this.ctx.storage.sql.exec(
-      'UPDATE entries SET modified_at = ? WHERE path = ?',
-      mtime.getTime(),
-      normalized
-    );
-  }
-
-  // === File Operations (Whole File) ===
-
-  async readFile(path: string): Promise<Uint8Array> {
+  async createReadStream(
+    path: string,
+    options?: { start?: number; end?: number }
+  ): Promise<ReadableStream<Uint8Array>> {
     this.ensureInitialized();
 
     const normalized = this.resolveSymlinks(path);
@@ -152,18 +136,29 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
       throw createFsError('EISDIR', path);
     }
 
-    return new Uint8Array(entry.content ?? new ArrayBuffer(0));
+    const content = new Uint8Array(entry.content ?? new ArrayBuffer(0));
+    const start = options?.start ?? 0;
+    const end = options?.end !== undefined ? options.end + 1 : content.length;
+    const chunk = content.slice(start, end);
+
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    });
   }
 
-  async writeFile(
+  async createWriteStream(
     path: string,
-    data: Uint8Array,
-    options?: { append?: boolean; exclusive?: boolean }
-  ): Promise<number> {
+    options?: { start?: number; flags?: 'w' | 'a' | 'r+' }
+  ): Promise<WritableStream<Uint8Array>> {
     this.ensureInitialized();
 
     const normalized = normalizePath(path);
     const parentPath = getParentPath(normalized);
+    const self = this;
+    let offset = options?.start ?? 0;
 
     // Verify parent exists and is a directory
     const parentResult = this.ctx.storage.sql
@@ -188,190 +183,130 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
 
     const existing = existingResult[0];
 
-    if (options?.exclusive && existing) {
-      throw createFsError('EEXIST', path);
-    }
     if (existing?.type === 'directory') {
       throw createFsError('EISDIR', path);
     }
 
-    const now = Date.now();
-    let finalContent: Uint8Array;
+    // Handle different modes
+    let existingContent: Uint8Array | null = null;
+    let createdAt: number | null = null;
+    let isFirstWrite = true;
 
-    if (options?.append && existing) {
-      const oldContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
-      finalContent = new Uint8Array(oldContent.length + data.length);
-      finalContent.set(oldContent, 0);
-      finalContent.set(data, oldContent.length);
-    } else {
-      finalContent = data;
-    }
-
-    if (existing) {
-      this.ctx.storage.sql.exec(
-        'UPDATE entries SET content = ?, size = ?, modified_at = ? WHERE path = ?',
-        finalContent,
-        finalContent.length,
-        now,
-        normalized
-      );
-    } else {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO entries (path, parent_path, name, type, size, content, created_at, modified_at)
-         VALUES (?, ?, ?, 'file', ?, ?, ?, ?)`,
-        normalized,
-        parentPath,
-        getBaseName(normalized),
-        finalContent.length,
-        finalContent,
-        now,
-        now
-      );
-    }
-
-    return data.length;
-  }
-
-  // === File Operations (Chunked) ===
-
-  async read(path: string, options: { offset: number; length: number }): Promise<Uint8Array> {
-    const content = await this.readFile(path);
-    return content.slice(options.offset, options.offset + options.length);
-  }
-
-  async write(path: string, data: Uint8Array, options: { offset: number }): Promise<number> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'content'>>(
-        'SELECT type, content FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      throw createFsError('ENOENT', path);
-    }
-    if (entry.type !== 'file') {
-      throw createFsError('EISDIR', path);
-    }
-
-    const oldContent = new Uint8Array(entry.content ?? new ArrayBuffer(0));
-    const newLength = Math.max(oldContent.length, options.offset + data.length);
-    const newContent = new Uint8Array(newLength);
-    newContent.set(oldContent, 0);
-    newContent.set(data, options.offset);
-
-    const now = Date.now();
-    this.ctx.storage.sql.exec(
-      'UPDATE entries SET content = ?, size = ?, modified_at = ? WHERE path = ?',
-      newContent,
-      newContent.length,
-      now,
-      normalized
-    );
-
-    return data.length;
-  }
-
-  // === File Operations (Streaming) ===
-
-  async createReadStream(
-    path: string,
-    options?: { start?: number; end?: number }
-  ): Promise<ReadableStream<Uint8Array>> {
-    const content = await this.readFile(path);
-    const start = options?.start ?? 0;
-    const end = options?.end ?? content.length;
-    const chunk = content.slice(start, end);
-
-    return new ReadableStream({
-      start(controller) {
-        controller.enqueue(chunk);
-        controller.close();
-      },
-    });
-  }
-
-  async createWriteStream(
-    path: string,
-    options?: { start?: number; flags?: 'w' | 'a' | 'r+' }
-  ): Promise<WritableStream<Uint8Array>> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const self = this;
-    let offset = options?.start ?? 0;
-
-    // Initialize file if needed
-    if (options?.flags !== 'r+') {
-      const existingResult = this.ctx.storage.sql
-        .exec<Pick<DbEntry, 'type' | 'content'>>(
-          'SELECT type, content FROM entries WHERE path = ?',
-          normalized
-        )
-        .toArray();
-
-      const existing = existingResult[0];
-      if (!existing || options?.flags === 'w') {
-        await this.writeFile(path, new Uint8Array(0));
+    if (options?.flags === 'r+') {
+      // Read-write mode: file must exist
+      if (!existing || existing.type !== 'file') {
+        throw createFsError('ENOENT', path);
       }
-      if (options?.flags === 'a' && existing?.type === 'file' && existing.content) {
-        offset = existing.content.byteLength;
+      existingContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
+      createdAt = existing.created_at;
+    } else if (options?.flags === 'a') {
+      // Append mode: create if doesn't exist, set offset to end
+      if (existing && existing.type === 'file') {
+        existingContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
+        offset = existingContent.length;
+        createdAt = existing.created_at;
+      }
+    } else {
+      // Write mode (default): create or truncate
+      if (existing) {
+        createdAt = existing.created_at;
       }
     }
 
     return new WritableStream({
-      async write(chunk) {
-        await self.write(path, chunk, { offset });
+      write(chunk) {
+        let currentContent: Uint8Array;
+
+        // In write mode, first write starts fresh (truncates existing)
+        if (options?.flags !== 'r+' && options?.flags !== 'a' && isFirstWrite) {
+          currentContent = new Uint8Array(0);
+          isFirstWrite = false;
+        } else {
+          // Read current state from DB to handle multiple writes
+          const currentResult = self.ctx.storage.sql
+            .exec<Pick<DbEntry, 'content'>>(
+              'SELECT content FROM entries WHERE path = ?',
+              normalized
+            )
+            .toArray();
+
+          if (currentResult[0]?.content) {
+            currentContent = new Uint8Array(currentResult[0].content);
+          } else if (existingContent) {
+            currentContent = existingContent;
+          } else {
+            currentContent = new Uint8Array(0);
+          }
+        }
+
+        const newLength = Math.max(currentContent.length, offset + chunk.length);
+        const newContent = new Uint8Array(newLength);
+        newContent.set(currentContent, 0);
+        newContent.set(chunk, offset);
+
+        const now = Date.now();
+
+        const checkResult = self.ctx.storage.sql
+          .exec<Pick<DbEntry, 'id'>>('SELECT id FROM entries WHERE path = ?', normalized)
+          .toArray();
+
+        if (checkResult.length > 0) {
+          self.ctx.storage.sql.exec(
+            'UPDATE entries SET content = ?, size = ?, modified_at = ? WHERE path = ?',
+            newContent,
+            newContent.length,
+            now,
+            normalized
+          );
+        } else {
+          self.ctx.storage.sql.exec(
+            `INSERT INTO entries (path, parent_path, name, type, size, content, created_at, modified_at)
+             VALUES (?, ?, ?, 'file', ?, ?, ?, ?)`,
+            normalized,
+            parentPath,
+            getBaseName(normalized),
+            newContent.length,
+            newContent,
+            createdAt ?? now,
+            now
+          );
+        }
+
         offset += chunk.length;
       },
+      close() {
+        // Handle case where stream is closed without any writes (e.g., truncate to zero)
+        // In 'w' mode, if no writes occurred, we should create/truncate the file to empty
+        if (isFirstWrite && options?.flags !== 'r+' && options?.flags !== 'a') {
+          const now = Date.now();
+          const emptyContent = new Uint8Array(0);
+
+          const checkResult = self.ctx.storage.sql
+            .exec<Pick<DbEntry, 'id'>>('SELECT id FROM entries WHERE path = ?', normalized)
+            .toArray();
+
+          if (checkResult.length > 0) {
+            self.ctx.storage.sql.exec(
+              'UPDATE entries SET content = ?, size = 0, modified_at = ? WHERE path = ?',
+              emptyContent,
+              now,
+              normalized
+            );
+          } else {
+            self.ctx.storage.sql.exec(
+              `INSERT INTO entries (path, parent_path, name, type, size, content, created_at, modified_at)
+               VALUES (?, ?, ?, 'file', 0, ?, ?, ?)`,
+              normalized,
+              parentPath,
+              getBaseName(normalized),
+              emptyContent,
+              createdAt ?? now,
+              now
+            );
+          }
+        }
+      },
     });
-  }
-
-  // === Other File Operations ===
-
-  async truncate(path: string, length = 0): Promise<void> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'content'>>(
-        'SELECT type, content FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      throw createFsError('ENOENT', path);
-    }
-    if (entry.type !== 'file') {
-      throw createFsError('EISDIR', path);
-    }
-
-    const oldContent = new Uint8Array(entry.content ?? new ArrayBuffer(0));
-    let newContent: Uint8Array;
-
-    if (length < oldContent.length) {
-      newContent = oldContent.slice(0, length);
-    } else if (length > oldContent.length) {
-      newContent = new Uint8Array(length);
-      newContent.set(oldContent, 0);
-    } else {
-      newContent = oldContent;
-    }
-
-    const now = Date.now();
-    this.ctx.storage.sql.exec(
-      'UPDATE entries SET content = ?, size = ?, modified_at = ? WHERE path = ?',
-      newContent,
-      newContent.length,
-      now,
-      normalized
-    );
   }
 
   // === Directory Operations ===
@@ -571,159 +506,5 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
     }
 
     return entry.symlink_target;
-  }
-
-  async unlink(path: string): Promise<void> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type'>>('SELECT type FROM entries WHERE path = ?', normalized)
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      throw createFsError('ENOENT', path);
-    }
-    if (entry.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    this.ctx.storage.sql.exec('DELETE FROM entries WHERE path = ?', normalized);
-  }
-
-  // === Copy/Move Operations ===
-
-  async rename(oldPath: string, newPath: string): Promise<void> {
-    this.ensureInitialized();
-
-    const normalizedOld = normalizePath(oldPath);
-    const normalizedNew = normalizePath(newPath);
-
-    // Verify source exists
-    const entryResult = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type'>>('SELECT type FROM entries WHERE path = ?', normalizedOld)
-      .toArray();
-
-    const entry = entryResult[0];
-    if (!entry) {
-      throw createFsError('ENOENT', oldPath);
-    }
-
-    // Verify destination parent exists
-    const newParent = getParentPath(normalizedNew);
-    const parentResult = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type'>>('SELECT type FROM entries WHERE path = ?', newParent)
-      .toArray();
-
-    const parent = parentResult[0];
-    if (!parent) {
-      throw createFsError('ENOENT', newParent);
-    }
-    if (parent.type !== 'directory') {
-      throw createFsError('ENOTDIR', newParent);
-    }
-
-    const now = Date.now();
-
-    // Delete any existing entry at destination
-    this.ctx.storage.sql.exec('DELETE FROM entries WHERE path = ?', normalizedNew);
-
-    // Update the entry itself
-    this.ctx.storage.sql.exec(
-      'UPDATE entries SET path = ?, parent_path = ?, name = ?, modified_at = ? WHERE path = ?',
-      normalizedNew,
-      newParent,
-      getBaseName(normalizedNew),
-      now,
-      normalizedOld
-    );
-
-    // If directory, update all descendants
-    if (entry.type === 'directory') {
-      const oldPrefix = `${normalizedOld}/`;
-      const newPrefix = `${normalizedNew}/`;
-
-      // Get all descendants
-      const descendants = this.ctx.storage.sql
-        .exec<Pick<DbEntry, 'path'>>("SELECT path FROM entries WHERE path LIKE ? || '%'", oldPrefix)
-        .toArray();
-
-      for (const desc of descendants) {
-        const newDescPath = newPrefix + desc.path.slice(oldPrefix.length);
-        const newDescParent = getParentPath(newDescPath);
-        this.ctx.storage.sql.exec(
-          'UPDATE entries SET path = ?, parent_path = ? WHERE path = ?',
-          newDescPath,
-          newDescParent,
-          desc.path
-        );
-      }
-    }
-  }
-
-  async cp(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
-    this.ensureInitialized();
-
-    const normalizedSrc = normalizePath(src);
-    const normalizedDest = normalizePath(dest);
-
-    const srcResult = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'content' | 'symlink_target'>>(
-        'SELECT type, content, symlink_target FROM entries WHERE path = ?',
-        normalizedSrc
-      )
-      .toArray();
-
-    const srcEntry = srcResult[0];
-    if (!srcEntry) {
-      throw createFsError('ENOENT', src);
-    }
-
-    if (srcEntry.type === 'file') {
-      await this.writeFile(dest, new Uint8Array(srcEntry.content ?? new ArrayBuffer(0)));
-    } else if (srcEntry.type === 'directory') {
-      if (!options?.recursive) {
-        throw createFsError('EISDIR', src);
-      }
-
-      await this.mkdir(dest, { recursive: true });
-
-      const srcPrefix = normalizedSrc === '/' ? '/' : `${normalizedSrc}/`;
-      const descendants = this.ctx.storage.sql
-        .exec<Pick<DbEntry, 'path' | 'type' | 'content' | 'symlink_target'>>(
-          "SELECT path, type, content, symlink_target FROM entries WHERE path LIKE ? || '%'",
-          srcPrefix
-        )
-        .toArray();
-
-      for (const entry of descendants) {
-        const relativePath = entry.path.slice(srcPrefix.length);
-        const destPath = `${normalizedDest}/${relativePath}`;
-
-        if (entry.type === 'file') {
-          await this.writeFile(destPath, new Uint8Array(entry.content ?? new ArrayBuffer(0)));
-        } else if (entry.type === 'directory') {
-          await this.mkdir(destPath, { recursive: true });
-        } else if (entry.type === 'symlink' && entry.symlink_target) {
-          await this.symlink(destPath, entry.symlink_target);
-        }
-      }
-    } else if (srcEntry.type === 'symlink' && srcEntry.symlink_target) {
-      await this.symlink(dest, srcEntry.symlink_target);
-    }
-  }
-
-  async access(path: string, _mode?: number): Promise<void> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'id'>>('SELECT id FROM entries WHERE path = ?', normalized)
-      .toArray();
-
-    if (result.length === 0) {
-      throw createFsError('ENOENT', path);
-    }
   }
 }

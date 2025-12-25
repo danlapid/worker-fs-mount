@@ -18,8 +18,11 @@ export interface DirEntry {
 }
 
 /**
- * Interface that WorkerEntrypoints must implement to be mountable.
- * All methods are optional except the core ones.
+ * Stream-first filesystem interface that WorkerEntrypoints must implement.
+ *
+ * This is a minimal core interface - operations like readFile, writeFile,
+ * truncate, cp, access, and rename are automatically derived from these
+ * core streaming primitives by worker-fs-mount.
  */
 export interface WorkerFilesystem {
   // === Metadata Operations ===
@@ -32,63 +35,15 @@ export interface WorkerFilesystem {
    */
   stat(path: string, options?: { followSymlinks?: boolean }): Promise<Stat | null>;
 
-  /**
-   * Set the last modified time of a file.
-   * @param path - Path relative to mount point
-   * @param mtime - New modification time
-   */
-  setLastModified?(path: string, mtime: Date): Promise<void>;
-
-  // === File Operations (Whole File) ===
-
-  /**
-   * Read entire file contents.
-   * @param path - Path relative to mount point
-   * @returns File contents as Uint8Array
-   */
-  readFile(path: string): Promise<Uint8Array>;
-
-  /**
-   * Write entire file contents.
-   * @param path - Path relative to mount point
-   * @param data - Data to write
-   * @param options - Write options
-   * @returns Number of bytes written
-   */
-  writeFile(
-    path: string,
-    data: Uint8Array,
-    options?: { append?: boolean; exclusive?: boolean }
-  ): Promise<number>;
-
-  // === File Operations (Chunked) ===
-
-  /**
-   * Read a chunk of file contents at a specific offset.
-   * @param path - Path relative to mount point
-   * @param options - Read options with offset and length
-   * @returns File chunk as Uint8Array
-   */
-  read?(path: string, options: { offset: number; length: number }): Promise<Uint8Array>;
-
-  /**
-   * Write data at a specific offset in the file.
-   * @param path - Path relative to mount point
-   * @param data - Data to write
-   * @param options - Write options with offset
-   * @returns Number of bytes written
-   */
-  write?(path: string, data: Uint8Array, options: { offset: number }): Promise<number>;
-
-  // === File Operations (Streaming) ===
+  // === Streaming Operations ===
 
   /**
    * Create a readable stream for a file.
    * @param path - Path relative to mount point
-   * @param options - Stream options
-   * @returns ReadableStream that yields file chunks
+   * @param options - Stream options (start/end for partial reads)
+   * @returns Promise resolving to ReadableStream that yields file chunks
    */
-  createReadStream?(
+  createReadStream(
     path: string,
     options?: { start?: number; end?: number }
   ): Promise<ReadableStream<Uint8Array>>;
@@ -96,22 +51,13 @@ export interface WorkerFilesystem {
   /**
    * Create a writable stream for a file.
    * @param path - Path relative to mount point
-   * @param options - Stream options
-   * @returns WritableStream to write file data
+   * @param options - Stream options (start for offset writes, flags for mode)
+   * @returns Promise resolving to WritableStream
    */
-  createWriteStream?(
+  createWriteStream(
     path: string,
     options?: { start?: number; flags?: 'w' | 'a' | 'r+' }
   ): Promise<WritableStream<Uint8Array>>;
-
-  // === Other File Operations ===
-
-  /**
-   * Truncate a file to specified length.
-   * @param path - Path relative to mount point
-   * @param length - New length (default: 0)
-   */
-  truncate?(path: string, length?: number): Promise<void>;
 
   // === Directory Operations ===
 
@@ -153,34 +99,4 @@ export interface WorkerFilesystem {
    * @returns The target path
    */
   readlink?(path: string): Promise<string>;
-
-  /**
-   * Remove a file or symbolic link.
-   * @param path - Path relative to mount point
-   */
-  unlink(path: string): Promise<void>;
-
-  // === Copy/Move Operations ===
-
-  /**
-   * Rename (move) a file or directory.
-   * @param oldPath - Current path
-   * @param newPath - New path
-   */
-  rename?(oldPath: string, newPath: string): Promise<void>;
-
-  /**
-   * Copy a file or directory.
-   * @param src - Source path
-   * @param dest - Destination path
-   * @param options - Copy options
-   */
-  cp?(src: string, dest: string, options?: { recursive?: boolean }): Promise<void>;
-
-  /**
-   * Check if a path exists and is accessible.
-   * @param path - Path relative to mount point
-   * @param mode - Access mode (not used, for Node.js compat)
-   */
-  access?(path: string, mode?: number): Promise<void>;
 }

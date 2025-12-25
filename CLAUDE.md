@@ -98,9 +98,10 @@ The package uses wrangler's `[alias]` feature to replace `node:fs/promises` at b
 
 ### Type System (`types.ts`)
 
-- **`WorkerFilesystem`**: interface that mounted stubs must implement
-  - Required: `stat`, `readFile`, `writeFile`, `readdir`, `mkdir`, `rm`, `unlink`
-  - Optional: `read`, `write`, `createReadStream`, `createWriteStream`, `truncate`, `rename`, `cp`, `symlink`, `readlink`, `access`, `setLastModified`
+- **`WorkerFilesystem`**: stream-first interface that mounted stubs must implement
+  - Required (6): `stat`, `createReadStream`, `createWriteStream`, `readdir`, `mkdir`, `rm`
+  - Optional (2): `symlink`, `readlink`
+  - Derived operations (implemented in fs-promises.ts): `readFile`, `writeFile`, `truncate`, `rename`, `cp`, `unlink`, `access`, `appendFile`
 - **`Stat`**: `{ type: 'file'|'directory'|'symlink', size: number, lastModified?: Date, ... }`
 - **`DirEntry`**: `{ name: string, type: 'file'|'directory'|'symlink' }`
 
@@ -170,27 +171,20 @@ The tests use a **pnpm workspace** setup where `packages/tests/` is a workspace 
 
 ### Adding a New fs Method
 
-1. Add the wrapped function to `packages/worker-fs-mount/src/fs-promises.ts` following the pattern:
-   ```typescript
-   export async function methodName(
-     path: Parameters<typeof realFs.methodName>[0],
-     ...args
-   ): Promise<ReturnType> {
-     const pathStr = getPath(path);
-     if (pathStr) {
-       const match = findMount(pathStr);
-       if (match) {
-         // Call stub method, convert types as needed
-         return match.mount.stub.methodName(match.relativePath, ...);
-       }
-     }
-     return realFs.methodName(path, ...args);
-   }
-   ```
-2. Add corresponding method to `WorkerFilesystem` interface in `packages/worker-fs-mount/src/types.ts`
+Most fs methods should be derived from the core streaming interface. Only add to `WorkerFilesystem` if the operation cannot be expressed using the existing core methods.
+
+**For derived operations** (preferred):
+1. Add the function to `packages/worker-fs-mount/src/fs-promises.ts`
+2. Implement using `createReadStream`, `createWriteStream`, `stat`, `rm`, etc.
 3. Add test endpoint in `packages/tests/index.ts`
 4. Add test case in `packages/tests/index.test.ts`
 5. Update README.md with the new method
+
+**For core operations** (only if truly necessary):
+1. Add method to `WorkerFilesystem` interface in `packages/worker-fs-mount/src/types.ts`
+2. Implement in all filesystem packages (memory-fs, r2-fs, durable-object-fs)
+3. Add wrapper in `fs-promises.ts`
+4. Add tests and update docs
 
 ### Adding a New Export
 

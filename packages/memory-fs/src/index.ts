@@ -75,19 +75,20 @@ function resetMemoryFilesystemState(state: MemoryFilesystemState): void {
  * @example
  * ```typescript
  * import { MemoryFilesystem } from 'memory-fs';
- * import { mount, withMounts } from 'worker-fs-mount';
+ * import { mount } from 'worker-fs-mount';
+ * import { exports } from 'cloudflare:workers';
  * import fs from 'node:fs/promises';
  *
- * // Re-export to make available via ctx.exports
+ * // Re-export to make available via exports
  * export { MemoryFilesystem };
  *
+ * // Mount at module level
+ * mount('/mem', exports.MemoryFilesystem);
+ *
  * export default {
- *   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
- *     return withMounts(async () => {
- *       mount('/mem', ctx.exports.MemoryFilesystem);
- *       await fs.writeFile('/mem/hello.txt', 'Hello!');
- *       return new Response(await fs.readFile('/mem/hello.txt', 'utf8'));
- *     });
+ *   async fetch(request: Request) {
+ *     await fs.writeFile('/mem/hello.txt', 'Hello!');
+ *     return new Response(await fs.readFile('/mem/hello.txt', 'utf8'));
  *   }
  * }
  * ```
@@ -158,18 +159,12 @@ export class MemoryFilesystem extends WorkerEntrypoint implements WorkerFilesyst
     }
   }
 
-  async setLastModified(path: string, mtime: Date): Promise<void> {
-    const normalized = normalizePath(path);
-    const node = this.nodes.get(normalized);
-    if (!node) {
-      throw createFsError('ENOENT', path);
-    }
-    node.lastModified = mtime;
-  }
+  // === Streaming Operations ===
 
-  // === File Operations (Whole File) ===
-
-  async readFile(path: string): Promise<Uint8Array> {
+  async createReadStream(
+    path: string,
+    options?: { start?: number; end?: number }
+  ): Promise<ReadableStream<Uint8Array>> {
     const normalized = this.resolveSymlink(path);
     const node = this.nodes.get(normalized);
     if (!node) {
@@ -178,87 +173,10 @@ export class MemoryFilesystem extends WorkerEntrypoint implements WorkerFilesyst
     if (node.type !== 'file') {
       throw createFsError('EISDIR', path);
     }
-    return node.content;
-  }
 
-  async writeFile(
-    path: string,
-    data: Uint8Array,
-    options?: { append?: boolean; exclusive?: boolean }
-  ): Promise<number> {
-    const normalized = normalizePath(path);
-    const existing = this.nodes.get(normalized);
-
-    if (options?.exclusive && existing) {
-      throw createFsError('EEXIST', path);
-    }
-
-    // Check parent directory exists
-    const parentPath = getParentPath(normalized);
-    const parent = this.nodes.get(parentPath);
-    if (!parent || parent.type !== 'directory') {
-      throw createFsError('ENOENT', parentPath);
-    }
-
-    if (existing && existing.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    const now = new Date();
-    if (options?.append && existing && existing.type === 'file') {
-      const newContent = new Uint8Array(existing.content.length + data.length);
-      newContent.set(existing.content, 0);
-      newContent.set(data, existing.content.length);
-      existing.content = newContent;
-      existing.lastModified = now;
-      return data.length;
-    }
-
-    this.nodes.set(normalized, {
-      type: 'file',
-      content: data,
-      lastModified: now,
-      created: existing?.created ?? now,
-    });
-
-    return data.length;
-  }
-
-  // === File Operations (Chunked) ===
-
-  async read(path: string, options: { offset: number; length: number }): Promise<Uint8Array> {
-    const content = await this.readFile(path);
-    return content.slice(options.offset, options.offset + options.length);
-  }
-
-  async write(path: string, data: Uint8Array, options: { offset: number }): Promise<number> {
-    const normalized = normalizePath(path);
-    const node = this.nodes.get(normalized);
-    if (!node) {
-      throw createFsError('ENOENT', path);
-    }
-    if (node.type !== 'file') {
-      throw createFsError('EISDIR', path);
-    }
-
-    const newLength = Math.max(node.content.length, options.offset + data.length);
-    const newContent = new Uint8Array(newLength);
-    newContent.set(node.content, 0);
-    newContent.set(data, options.offset);
-    node.content = newContent;
-    node.lastModified = new Date();
-    return data.length;
-  }
-
-  // === File Operations (Streaming) ===
-
-  async createReadStream(
-    path: string,
-    options?: { start?: number; end?: number }
-  ): Promise<ReadableStream<Uint8Array>> {
-    const content = await this.readFile(path);
+    const content = node.content;
     const start = options?.start ?? 0;
-    const end = options?.end ?? content.length;
+    const end = options?.end !== undefined ? options.end + 1 : content.length;
     const chunk = content.slice(start, end);
 
     return new ReadableStream({
@@ -277,45 +195,65 @@ export class MemoryFilesystem extends WorkerEntrypoint implements WorkerFilesyst
     const self = this;
     let offset = options?.start ?? 0;
 
-    // Initialize file if needed
-    if (options?.flags !== 'r+') {
-      const existing = this.nodes.get(normalized);
-      if (!existing || options?.flags === 'w') {
-        await this.writeFile(path, new Uint8Array(0));
-      }
-      if (options?.flags === 'a' && existing?.type === 'file') {
-        offset = existing.content.length;
-      }
+    // Check parent directory exists
+    const parentPath = getParentPath(normalized);
+    const parent = this.nodes.get(parentPath);
+    if (!parent || parent.type !== 'directory') {
+      throw createFsError('ENOENT', parentPath);
     }
 
-    return new WritableStream({
-      async write(chunk) {
-        await self.write(path, chunk, { offset });
-        offset += chunk.length;
-      },
-    });
-  }
-
-  // === Other File Operations ===
-
-  async truncate(path: string, length = 0): Promise<void> {
-    const normalized = normalizePath(path);
-    const node = this.nodes.get(normalized);
-    if (!node) {
-      throw createFsError('ENOENT', path);
-    }
-    if (node.type !== 'file') {
+    const existing = this.nodes.get(normalized);
+    if (existing && existing.type === 'directory') {
       throw createFsError('EISDIR', path);
     }
 
-    if (length < node.content.length) {
-      node.content = node.content.slice(0, length);
-    } else if (length > node.content.length) {
-      const newContent = new Uint8Array(length);
-      newContent.set(node.content, 0);
-      node.content = newContent;
+    // Initialize or get existing file
+    let fileNode: FileNode;
+    const now = new Date();
+
+    if (options?.flags === 'r+') {
+      // Read-write mode: file must exist
+      if (!existing || existing.type !== 'file') {
+        throw createFsError('ENOENT', path);
+      }
+      fileNode = existing;
+    } else if (options?.flags === 'a') {
+      // Append mode: create if doesn't exist, set offset to end
+      if (existing && existing.type === 'file') {
+        fileNode = existing;
+        offset = existing.content.length;
+      } else {
+        fileNode = {
+          type: 'file',
+          content: new Uint8Array(0),
+          lastModified: now,
+          created: now,
+        };
+        this.nodes.set(normalized, fileNode);
+      }
+    } else {
+      // Write mode (default): create or truncate
+      fileNode = {
+        type: 'file',
+        content: new Uint8Array(0),
+        lastModified: now,
+        created: existing?.created ?? now,
+      };
+      this.nodes.set(normalized, fileNode);
     }
-    node.lastModified = new Date();
+
+    return new WritableStream({
+      write(chunk) {
+        const node = self.nodes.get(normalized) as FileNode;
+        const newLength = Math.max(node.content.length, offset + chunk.length);
+        const newContent = new Uint8Array(newLength);
+        newContent.set(node.content, 0);
+        newContent.set(chunk, offset);
+        node.content = newContent;
+        node.lastModified = new Date();
+        offset += chunk.length;
+      },
+    });
   }
 
   // === Directory Operations ===
@@ -452,100 +390,5 @@ export class MemoryFilesystem extends WorkerEntrypoint implements WorkerFilesyst
       throw createFsError('EINVAL', path);
     }
     return node.target;
-  }
-
-  async unlink(path: string): Promise<void> {
-    const normalized = normalizePath(path);
-    const node = this.nodes.get(normalized);
-    if (!node) {
-      throw createFsError('ENOENT', path);
-    }
-    if (node.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-    this.nodes.delete(normalized);
-  }
-
-  // === Copy/Move Operations ===
-
-  async rename(oldPath: string, newPath: string): Promise<void> {
-    const normalizedOld = normalizePath(oldPath);
-    const normalizedNew = normalizePath(newPath);
-
-    const node = this.nodes.get(normalizedOld);
-    if (!node) {
-      throw createFsError('ENOENT', oldPath);
-    }
-
-    const newParent = getParentPath(normalizedNew);
-    if (!this.nodes.has(newParent)) {
-      throw createFsError('ENOENT', newParent);
-    }
-
-    // Move the node
-    this.nodes.delete(normalizedOld);
-    this.nodes.set(normalizedNew, node);
-    node.lastModified = new Date();
-
-    // If directory, move all children
-    if (node.type === 'directory') {
-      const oldPrefix = `${normalizedOld}/`;
-      const newPrefix = `${normalizedNew}/`;
-      const toMove: [string, FsNode][] = [];
-
-      for (const [p, n] of this.nodes) {
-        if (p.startsWith(oldPrefix)) {
-          toMove.push([p, n]);
-        }
-      }
-
-      for (const [p, n] of toMove) {
-        this.nodes.delete(p);
-        this.nodes.set(newPrefix + p.slice(oldPrefix.length), n);
-      }
-    }
-  }
-
-  async cp(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
-    const normalizedSrc = normalizePath(src);
-    const normalizedDest = normalizePath(dest);
-
-    const srcNode = this.nodes.get(normalizedSrc);
-    if (!srcNode) {
-      throw createFsError('ENOENT', src);
-    }
-
-    if (srcNode.type === 'file') {
-      await this.writeFile(dest, srcNode.content);
-    } else if (srcNode.type === 'directory') {
-      if (!options?.recursive) {
-        throw createFsError('EISDIR', src);
-      }
-
-      await this.mkdir(dest, { recursive: true });
-
-      const srcPrefix = normalizedSrc === '/' ? '/' : `${normalizedSrc}/`;
-      for (const [p, n] of this.nodes) {
-        if (p.startsWith(srcPrefix)) {
-          const relativePath = p.slice(srcPrefix.length);
-          const destPath = `${normalizedDest}/${relativePath}`;
-          if (n.type === 'file') {
-            await this.writeFile(destPath, n.content);
-          } else if (n.type === 'directory') {
-            await this.mkdir(destPath, { recursive: true });
-          }
-        }
-      }
-    } else if (srcNode.type === 'symlink') {
-      await this.symlink(dest, srcNode.target);
-    }
-  }
-
-  async access(path: string, _mode?: number): Promise<void> {
-    const normalized = normalizePath(path);
-    const node = this.nodes.get(normalized);
-    if (!node) {
-      throw createFsError('ENOENT', path);
-    }
   }
 }

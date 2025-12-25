@@ -31,49 +31,19 @@ const DIR_MARKER = '.dir';
  * @example
  * ```typescript
  * import { R2Filesystem } from 'r2-fs';
- * import { mount, withMounts } from 'worker-fs-mount';
- * import { WorkerEntrypoint } from 'cloudflare:workers';
+ * import { mount } from 'worker-fs-mount';
+ * import { env } from 'cloudflare:workers';
  * import fs from 'node:fs/promises';
  *
- * interface Env {
- *   MY_BUCKET: R2Bucket;
- * }
+ * // Mount at module level using importable env
+ * const r2fs = new R2Filesystem(env.MY_BUCKET);
+ * mount('/storage', r2fs);
  *
- * // Option 1: Create an entrypoint that exposes the filesystem
- * export class MyFilesystem extends WorkerEntrypoint<Env> implements WorkerFilesystem {
- *   private fs = new R2Filesystem(this.env.MY_BUCKET);
- *
- *   stat = this.fs.stat.bind(this.fs);
- *   readFile = this.fs.readFile.bind(this.fs);
- *   writeFile = this.fs.writeFile.bind(this.fs);
- *   readdir = this.fs.readdir.bind(this.fs);
- *   mkdir = this.fs.mkdir.bind(this.fs);
- *   rm = this.fs.rm.bind(this.fs);
- *   unlink = this.fs.unlink.bind(this.fs);
- *   rename = this.fs.rename.bind(this.fs);
- *   cp = this.fs.cp.bind(this.fs);
- *   symlink = this.fs.symlink.bind(this.fs);
- *   readlink = this.fs.readlink.bind(this.fs);
- *   truncate = this.fs.truncate.bind(this.fs);
- *   access = this.fs.access.bind(this.fs);
- *   setLastModified = this.fs.setLastModified.bind(this.fs);
- *   read = this.fs.read.bind(this.fs);
- *   write = this.fs.write.bind(this.fs);
- *   createReadStream = this.fs.createReadStream.bind(this.fs);
- *   createWriteStream = this.fs.createWriteStream.bind(this.fs);
- * }
- *
- * // Option 2: Use directly in a fetch handler
  * export default {
- *   async fetch(request: Request, env: Env) {
- *     return withMounts(async () => {
- *       const r2fs = new R2Filesystem(env.MY_BUCKET);
- *       mount('/storage', r2fs);
- *
- *       await fs.writeFile('/storage/hello.txt', 'Hello, World!');
- *       const content = await fs.readFile('/storage/hello.txt', 'utf8');
- *       return new Response(content);
- *     });
+ *   async fetch(request: Request) {
+ *     await fs.writeFile('/storage/hello.txt', 'Hello, World!');
+ *     const content = await fs.readFile('/storage/hello.txt', 'utf8');
+ *     return new Response(content);
  *   }
  * }
  * ```
@@ -200,154 +170,7 @@ export class R2Filesystem implements WorkerFilesystem {
     return null;
   }
 
-  async setLastModified(path: string, _mtime: Date): Promise<void> {
-    const normalized = normalizePath(path);
-    const stat = await this.stat(normalized);
-
-    if (!stat) {
-      throw createFsError('ENOENT', path);
-    }
-
-    // R2 doesn't support updating metadata without re-uploading the object.
-    // For now, we just verify the file exists. A full implementation would
-    // need to read and re-write the object with new metadata.
-  }
-
-  // === File Operations (Whole File) ===
-
-  async readFile(path: string): Promise<Uint8Array> {
-    const normalized = await this.resolveSymlinks(path);
-    const key = pathToKey(normalized);
-
-    const obj = await this.bucket.get(key);
-    if (!obj) {
-      throw createFsError('ENOENT', path);
-    }
-
-    const meta = this.parseMetadata(obj);
-    if (meta.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    return new Uint8Array(await obj.arrayBuffer());
-  }
-
-  async writeFile(
-    path: string,
-    data: Uint8Array,
-    options?: { append?: boolean; exclusive?: boolean }
-  ): Promise<number> {
-    const normalized = normalizePath(path);
-    const parentPath = getParentPath(normalized);
-
-    // Verify parent directory exists
-    if (parentPath !== '/') {
-      const parentExists = await this.directoryExists(parentPath);
-      if (!parentExists) {
-        throw createFsError('ENOENT', parentPath);
-      }
-    }
-
-    const key = pathToKey(normalized);
-
-    // Check for exclusive flag
-    if (options?.exclusive) {
-      const existing = await this.bucket.head(key);
-      if (existing) {
-        throw createFsError('EEXIST', path);
-      }
-    }
-
-    // Check if trying to write to a directory
-    const dirMarker = await this.bucket.head(key + DIR_MARKER);
-    if (dirMarker) {
-      throw createFsError('EISDIR', path);
-    }
-
-    let finalData = data;
-
-    // Handle append mode
-    if (options?.append) {
-      const existing = await this.bucket.get(key);
-      if (existing) {
-        const oldData = new Uint8Array(await existing.arrayBuffer());
-        finalData = new Uint8Array(oldData.length + data.length);
-        finalData.set(oldData, 0);
-        finalData.set(data, oldData.length);
-      }
-    }
-
-    const now = new Date().toISOString();
-    const existingObj = await this.bucket.head(key);
-    const created = existingObj ? this.parseMetadata(existingObj).created : now;
-
-    await this.bucket.put(key, finalData, {
-      customMetadata: {
-        type: 'file',
-        created,
-      },
-    });
-
-    return data.length;
-  }
-
-  // === File Operations (Chunked) ===
-
-  async read(path: string, options: { offset: number; length: number }): Promise<Uint8Array> {
-    const normalized = await this.resolveSymlinks(path);
-    const key = pathToKey(normalized);
-
-    const obj = await this.bucket.get(key, {
-      range: {
-        offset: options.offset,
-        length: options.length,
-      },
-    });
-
-    if (!obj) {
-      throw createFsError('ENOENT', path);
-    }
-
-    const meta = this.parseMetadata(obj);
-    if (meta.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    return new Uint8Array(await obj.arrayBuffer());
-  }
-
-  async write(path: string, data: Uint8Array, options: { offset: number }): Promise<number> {
-    const normalized = normalizePath(path);
-    const key = pathToKey(normalized);
-
-    // R2 doesn't support partial writes, so we need to read-modify-write
-    const existing = await this.bucket.get(key);
-    if (!existing) {
-      throw createFsError('ENOENT', path);
-    }
-
-    const meta = this.parseMetadata(existing);
-    if (meta.type !== 'file') {
-      throw createFsError('EISDIR', path);
-    }
-
-    const oldContent = new Uint8Array(await existing.arrayBuffer());
-    const newLength = Math.max(oldContent.length, options.offset + data.length);
-    const newContent = new Uint8Array(newLength);
-    newContent.set(oldContent, 0);
-    newContent.set(data, options.offset);
-
-    await this.bucket.put(key, newContent, {
-      customMetadata: {
-        type: 'file',
-        created: meta.created,
-      },
-    });
-
-    return data.length;
-  }
-
-  // === File Operations (Streaming) ===
+  // === Streaming Operations ===
 
   async createReadStream(
     path: string,
@@ -359,7 +182,7 @@ export class R2Filesystem implements WorkerFilesystem {
     const r2Options: R2GetOptions = {};
     if (options?.start !== undefined || options?.end !== undefined) {
       const start = options?.start ?? 0;
-      const length = options?.end !== undefined ? options.end - start : undefined;
+      const length = options?.end !== undefined ? options.end - start + 1 : undefined;
       r2Options.range = length !== undefined ? { offset: start, length } : { offset: start };
     }
 
@@ -381,22 +204,43 @@ export class R2Filesystem implements WorkerFilesystem {
     options?: { start?: number; flags?: 'w' | 'a' | 'r+' }
   ): Promise<WritableStream<Uint8Array>> {
     const normalized = normalizePath(path);
+    const parentPath = getParentPath(normalized);
+
+    // Verify parent directory exists
+    if (parentPath !== '/') {
+      const parentExists = await this.directoryExists(parentPath);
+      if (!parentExists) {
+        throw createFsError('ENOENT', parentPath);
+      }
+    }
+
     const key = pathToKey(normalized);
+
+    // Check if trying to write to a directory
+    const dirMarker = await this.bucket.head(key + DIR_MARKER);
+    if (dirMarker) {
+      throw createFsError('EISDIR', path);
+    }
+
     const self = this;
     let offset = options?.start ?? 0;
 
     // Collect all chunks and write at once on close
     const chunks: Uint8Array[] = [];
     let existingContent: Uint8Array | null = null;
+    let existingMeta: R2FsMetadata | null = null;
 
     // Get existing content if needed
     if (options?.flags === 'r+' || options?.flags === 'a') {
       const existing = await this.bucket.get(key);
       if (existing) {
         existingContent = new Uint8Array(await existing.arrayBuffer());
+        existingMeta = this.parseMetadata(existing);
         if (options?.flags === 'a') {
           offset = existingContent.length;
         }
+      } else if (options?.flags === 'r+') {
+        throw createFsError('ENOENT', path);
       }
     }
 
@@ -425,48 +269,13 @@ export class R2Filesystem implements WorkerFilesystem {
           finalContent = combinedChunks;
         }
 
+        const now = new Date().toISOString();
         await self.bucket.put(key, finalContent, {
           customMetadata: {
             type: 'file',
-            created: new Date().toISOString(),
+            created: existingMeta?.created ?? now,
           },
         });
-      },
-    });
-  }
-
-  // === Other File Operations ===
-
-  async truncate(path: string, length = 0): Promise<void> {
-    const normalized = normalizePath(path);
-    const key = pathToKey(normalized);
-
-    const existing = await this.bucket.get(key);
-    if (!existing) {
-      throw createFsError('ENOENT', path);
-    }
-
-    const meta = this.parseMetadata(existing);
-    if (meta.type !== 'file') {
-      throw createFsError('EISDIR', path);
-    }
-
-    const oldContent = new Uint8Array(await existing.arrayBuffer());
-    let newContent: Uint8Array;
-
-    if (length < oldContent.length) {
-      newContent = oldContent.slice(0, length);
-    } else if (length > oldContent.length) {
-      newContent = new Uint8Array(length);
-      newContent.set(oldContent, 0);
-    } else {
-      newContent = oldContent;
-    }
-
-    await this.bucket.put(key, newContent, {
-      customMetadata: {
-        type: 'file',
-        created: meta.created,
       },
     });
   }
@@ -688,188 +497,5 @@ export class R2Filesystem implements WorkerFilesystem {
     }
 
     return meta.symlinkTarget;
-  }
-
-  async unlink(path: string): Promise<void> {
-    const normalized = normalizePath(path);
-    const key = pathToKey(normalized);
-
-    // Check for directory marker first (directories throw EISDIR)
-    const dirMarker = await this.bucket.head(key + DIR_MARKER);
-    if (dirMarker) {
-      throw createFsError('EISDIR', path);
-    }
-
-    const obj = await this.bucket.head(key);
-    if (!obj) {
-      throw createFsError('ENOENT', path);
-    }
-
-    const meta = this.parseMetadata(obj);
-    if (meta.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    await this.bucket.delete(key);
-  }
-
-  // === Copy/Move Operations ===
-
-  async rename(oldPath: string, newPath: string): Promise<void> {
-    const normalizedOld = normalizePath(oldPath);
-    const normalizedNew = normalizePath(newPath);
-
-    // Get source info
-    const srcStat = await this.stat(normalizedOld);
-    if (!srcStat) {
-      throw createFsError('ENOENT', oldPath);
-    }
-
-    // Verify destination parent exists
-    const newParent = getParentPath(normalizedNew);
-    if (newParent !== '/') {
-      const parentExists = await this.directoryExists(newParent);
-      if (!parentExists) {
-        throw createFsError('ENOENT', newParent);
-      }
-    }
-
-    const oldKey = pathToKey(normalizedOld);
-    const newKey = pathToKey(normalizedNew);
-
-    if (srcStat.type === 'directory') {
-      // For directories, we need to copy all contents
-      const oldPrefix = `${oldKey}/`;
-      const newPrefix = `${newKey}/`;
-
-      // Copy directory marker
-      const oldDirMarker = await this.bucket.get(oldKey + DIR_MARKER);
-      if (oldDirMarker) {
-        const putOptions: R2PutOptions = {};
-        if (oldDirMarker.customMetadata) {
-          putOptions.customMetadata = oldDirMarker.customMetadata;
-        }
-        await this.bucket.put(newKey + DIR_MARKER, await oldDirMarker.arrayBuffer(), putOptions);
-        await this.bucket.delete(oldKey + DIR_MARKER);
-      } else {
-        // Create new directory marker
-        await this.bucket.put(newKey + DIR_MARKER, new Uint8Array(0), {
-          customMetadata: {
-            type: 'directory',
-            created: new Date().toISOString(),
-          },
-        });
-      }
-
-      // Copy all children
-      let cursor: string | undefined;
-      do {
-        const listOptions: R2ListOptions = { prefix: oldPrefix, limit: 1000 };
-        if (cursor) {
-          listOptions.cursor = cursor;
-        }
-        const listed = await this.bucket.list(listOptions);
-
-        for (const obj of listed.objects) {
-          const relativePath = obj.key.slice(oldPrefix.length);
-          const newObjKey = newPrefix + relativePath;
-
-          const fullObj = await this.bucket.get(obj.key);
-          if (fullObj) {
-            const putOptions: R2PutOptions = {};
-            if (fullObj.customMetadata) {
-              putOptions.customMetadata = fullObj.customMetadata;
-            }
-            await this.bucket.put(newObjKey, await fullObj.arrayBuffer(), putOptions);
-          }
-        }
-
-        // Delete old objects
-        if (listed.objects.length > 0) {
-          await this.bucket.delete(listed.objects.map((o) => o.key));
-        }
-
-        cursor = listed.truncated ? listed.cursor : undefined;
-      } while (cursor);
-    } else {
-      // For files/symlinks, simple copy + delete
-      const obj = await this.bucket.get(oldKey);
-      if (obj) {
-        const putOptions: R2PutOptions = {};
-        if (obj.customMetadata) {
-          putOptions.customMetadata = obj.customMetadata;
-        }
-        await this.bucket.put(newKey, await obj.arrayBuffer(), putOptions);
-        await this.bucket.delete(oldKey);
-      }
-    }
-  }
-
-  async cp(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
-    const normalizedSrc = normalizePath(src);
-    const normalizedDest = normalizePath(dest);
-
-    const srcStat = await this.stat(normalizedSrc);
-    if (!srcStat) {
-      throw createFsError('ENOENT', src);
-    }
-
-    const srcKey = pathToKey(normalizedSrc);
-    const destKey = pathToKey(normalizedDest);
-
-    if (srcStat.type === 'file' || srcStat.type === 'symlink') {
-      const obj = await this.bucket.get(srcKey);
-      if (obj) {
-        await this.bucket.put(destKey, await obj.arrayBuffer(), {
-          customMetadata: {
-            ...(obj.customMetadata ?? {}),
-            created: new Date().toISOString(),
-          },
-        });
-      }
-    } else if (srcStat.type === 'directory') {
-      if (!options?.recursive) {
-        throw createFsError('EISDIR', src);
-      }
-
-      // Create destination directory
-      await this.mkdir(normalizedDest, { recursive: true });
-
-      const srcPrefix = `${srcKey}/`;
-      const destPrefix = `${destKey}/`;
-
-      let cursor: string | undefined;
-      do {
-        const listOptions: R2ListOptions = { prefix: srcPrefix, limit: 1000 };
-        if (cursor) {
-          listOptions.cursor = cursor;
-        }
-        const listed = await this.bucket.list(listOptions);
-
-        for (const obj of listed.objects) {
-          const relativePath = obj.key.slice(srcPrefix.length);
-          const destObjKey = destPrefix + relativePath;
-
-          const fullObj = await this.bucket.get(obj.key);
-          if (fullObj) {
-            await this.bucket.put(destObjKey, await fullObj.arrayBuffer(), {
-              customMetadata: {
-                ...(fullObj.customMetadata ?? {}),
-                created: new Date().toISOString(),
-              },
-            });
-          }
-        }
-
-        cursor = listed.truncated ? listed.cursor : undefined;
-      } while (cursor);
-    }
-  }
-
-  async access(path: string, _mode?: number): Promise<void> {
-    const stat = await this.stat(path);
-    if (!stat) {
-      throw createFsError('ENOENT', path);
-    }
   }
 }

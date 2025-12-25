@@ -6,6 +6,9 @@
  *
  * [alias]
  * "node:fs/promises" = "worker-fs-mount/fs"
+ *
+ * This module implements derived operations (readFile, writeFile, truncate,
+ * cp, access, rename) on top of the core streaming interface.
  */
 
 import { Buffer } from 'node:buffer';
@@ -13,7 +16,7 @@ import type { BigIntStats, Dirent, Stats } from 'node:fs';
 // Import the SYNC fs module and use .promises to avoid alias loop
 import * as nodeFs from 'node:fs';
 import { findMount } from './registry.js';
-import type { DirEntry, Stat } from './types.js';
+import type { DirEntry, Stat, WorkerFilesystem } from './types.js';
 
 // Get the real fs/promises from the sync module
 const realFs = nodeFs.promises;
@@ -111,6 +114,98 @@ function toNodeDirent(entry: DirEntry, parentPath: string): Dirent {
   return dirent as Dirent;
 }
 
+// === Helper functions for derived operations ===
+
+/**
+ * Collect all chunks from a ReadableStream into a single Uint8Array.
+ */
+async function collectStream(stream: ReadableStream<Uint8Array>): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    totalLength += value.length;
+  }
+
+  const result = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return result;
+}
+
+/**
+ * Write data to a WritableStream.
+ */
+async function writeToStream(stream: WritableStream<Uint8Array>, data: Uint8Array): Promise<void> {
+  const writer = stream.getWriter();
+  try {
+    await writer.write(data);
+  } finally {
+    await writer.close();
+  }
+}
+
+/**
+ * Pipe a ReadableStream to a WritableStream.
+ */
+async function pipeStreams(
+  readable: ReadableStream<Uint8Array>,
+  writable: WritableStream<Uint8Array>
+): Promise<void> {
+  const reader = readable.getReader();
+  const writer = writable.getWriter();
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      await writer.write(value);
+    }
+  } finally {
+    await writer.close();
+  }
+}
+
+/**
+ * Recursively copy a directory using streaming.
+ */
+async function copyDirectoryRecursive(
+  srcStub: WorkerFilesystem,
+  srcPath: string,
+  destStub: WorkerFilesystem,
+  destPath: string
+): Promise<void> {
+  // Create destination directory
+  await destStub.mkdir(destPath, { recursive: true });
+
+  // List source directory
+  const entries = await srcStub.readdir(srcPath);
+
+  for (const entry of entries) {
+    const srcChildPath = srcPath === '/' ? `/${entry.name}` : `${srcPath}/${entry.name}`;
+    const destChildPath = destPath === '/' ? `/${entry.name}` : `${destPath}/${entry.name}`;
+
+    if (entry.type === 'directory') {
+      await copyDirectoryRecursive(srcStub, srcChildPath, destStub, destChildPath);
+    } else if (entry.type === 'file') {
+      const readStream = await srcStub.createReadStream(srcChildPath);
+      const writeStream = await destStub.createWriteStream(destChildPath);
+      await pipeStreams(readStream, writeStream);
+    } else if (entry.type === 'symlink' && srcStub.readlink && destStub.symlink) {
+      const target = await srcStub.readlink(srcChildPath);
+      await destStub.symlink(destChildPath, target);
+    }
+  }
+}
+
 // === Wrapped Functions ===
 
 export async function readFile(
@@ -121,7 +216,9 @@ export async function readFile(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      const data = await match.mount.stub.readFile(match.relativePath);
+      // Use streaming to read file
+      const stream = await match.mount.stub.createReadStream(match.relativePath);
+      const data = await collectStream(stream);
       const buffer = Buffer.from(data);
 
       const encoding =
@@ -176,12 +273,24 @@ export async function writeFile(
         }
       }
 
-      const flag = typeof options === 'object' && options !== null ? options.flag : undefined;
+      const flag =
+        typeof options === 'object' && options !== null ? options.flag : undefined;
+      const isAppend = flag === 'a' || flag === 'a+';
+      const isExclusive = flag === 'wx' || flag === 'xw';
 
-      await match.mount.stub.writeFile(match.relativePath, bytes, {
-        append: flag === 'a' || flag === 'a+',
-        exclusive: flag === 'wx' || flag === 'xw',
+      // Check exclusive flag
+      if (isExclusive) {
+        const existing = await match.mount.stub.stat(match.relativePath);
+        if (existing) {
+          throw createFsError('EEXIST', 'writeFile', pathStr);
+        }
+      }
+
+      // Use streaming to write file
+      const stream = await match.mount.stub.createWriteStream(match.relativePath, {
+        flags: isAppend ? 'a' : 'w',
       });
+      await writeToStream(stream, bytes);
       return;
     }
   }
@@ -204,7 +313,11 @@ export async function appendFile(
         bytes = new Uint8Array(data);
       }
 
-      await match.mount.stub.writeFile(match.relativePath, bytes, { append: true });
+      // Use streaming with append flag
+      const stream = await match.mount.stub.createWriteStream(match.relativePath, {
+        flags: 'a',
+      });
+      await writeToStream(stream, bytes);
       return;
     }
   }
@@ -326,6 +439,7 @@ export async function rmdir(
       return match.mount.stub.rm(match.relativePath, { recursive: false, force: false });
     }
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (realFs.rmdir as any)(path, options);
 }
 
@@ -334,7 +448,15 @@ export async function unlink(path: Parameters<typeof realFs.unlink>[0]): Promise
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      return match.mount.stub.unlink(match.relativePath);
+      // Derive unlink from stat + rm
+      const s = await match.mount.stub.stat(match.relativePath);
+      if (!s) {
+        throw createFsError('ENOENT', 'unlink', pathStr);
+      }
+      if (s.type === 'directory') {
+        throw createFsError('EISDIR', 'unlink', pathStr);
+      }
+      return match.mount.stub.rm(match.relativePath);
     }
   }
   return realFs.unlink(path);
@@ -351,15 +473,44 @@ export async function rename(
     const oldMatch = findMount(oldPathStr);
     const newMatch = findMount(newPathStr);
 
+    // Cross-mount rename not supported
     if (oldMatch?.mount !== newMatch?.mount) {
       throw createFsError('EXDEV', 'rename', oldPathStr, 'Cross-mount rename not supported');
     }
 
     if (oldMatch && newMatch) {
-      if (!oldMatch.mount.stub.rename) {
-        throw createFsError('ENOSYS', 'rename', oldPathStr, 'rename not supported');
+      // Derive rename as copy + delete
+      const srcStat = await oldMatch.mount.stub.stat(oldMatch.relativePath);
+      if (!srcStat) {
+        throw createFsError('ENOENT', 'rename', oldPathStr);
       }
-      return oldMatch.mount.stub.rename(oldMatch.relativePath, newMatch.relativePath);
+
+      if (srcStat.type === 'directory') {
+        // Recursive directory copy + delete
+        await copyDirectoryRecursive(
+          oldMatch.mount.stub,
+          oldMatch.relativePath,
+          newMatch.mount.stub,
+          newMatch.relativePath
+        );
+        await oldMatch.mount.stub.rm(oldMatch.relativePath, { recursive: true });
+      } else if (srcStat.type === 'file') {
+        // Stream copy + delete
+        const readStream = await oldMatch.mount.stub.createReadStream(oldMatch.relativePath);
+        const writeStream = await newMatch.mount.stub.createWriteStream(newMatch.relativePath);
+        await pipeStreams(readStream, writeStream);
+        await oldMatch.mount.stub.rm(oldMatch.relativePath);
+      } else if (srcStat.type === 'symlink') {
+        // Copy symlink + delete
+        if (oldMatch.mount.stub.readlink && newMatch.mount.stub.symlink) {
+          const target = await oldMatch.mount.stub.readlink(oldMatch.relativePath);
+          await newMatch.mount.stub.symlink(newMatch.relativePath, target);
+          await oldMatch.mount.stub.rm(oldMatch.relativePath);
+        } else {
+          throw createFsError('ENOSYS', 'rename', oldPathStr, 'symlink operations not supported');
+        }
+      }
+      return;
     }
   }
 
@@ -379,18 +530,22 @@ export async function copyFile(
     const destMatch = findMount(destStr);
 
     if (srcMatch || destMatch) {
-      let data: Uint8Array;
-      if (srcMatch) {
-        data = await srcMatch.mount.stub.readFile(srcMatch.relativePath);
-      } else {
-        const buffer = await realFs.readFile(src);
-        data = new Uint8Array(buffer);
-      }
-
-      if (destMatch) {
-        await destMatch.mount.stub.writeFile(destMatch.relativePath, data);
-      } else {
+      // Use streaming for copy
+      if (srcMatch && destMatch) {
+        // Both on mounts - pipe streams
+        const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
+        const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
+        await pipeStreams(readStream, writeStream);
+      } else if (srcMatch) {
+        // Source on mount, dest on real fs
+        const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
+        const data = await collectStream(readStream);
         await realFs.writeFile(dest, data);
+      } else if (destMatch) {
+        // Source on real fs, dest on mount
+        const buffer = await realFs.readFile(src);
+        const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
+        await writeToStream(writeStream, new Uint8Array(buffer));
       }
       return;
     }
@@ -411,46 +566,57 @@ export async function cp(
     const srcMatch = findMount(srcStr);
     const destMatch = findMount(destStr);
 
-    if (srcMatch && destMatch && srcMatch.mount === destMatch.mount) {
-      if (srcMatch.mount.stub.cp) {
-        const recursive = options?.recursive === true;
-        return srcMatch.mount.stub.cp(srcMatch.relativePath, destMatch.relativePath, {
-          recursive,
-        });
-      }
-    }
-
     if (srcMatch || destMatch) {
+      // Check if source is a directory
+      let srcStat: Stat | null | undefined;
       let isDirectory = false;
+
       if (srcMatch) {
-        const srcStat = await srcMatch.mount.stub.stat(srcMatch.relativePath);
+        srcStat = await srcMatch.mount.stub.stat(srcMatch.relativePath);
         isDirectory = srcStat?.type === 'directory';
       } else {
-        const srcStat = await realFs.stat(src as any);
-        isDirectory = srcStat.isDirectory();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const realStat = await realFs.stat(src as any);
+        isDirectory = realStat.isDirectory();
       }
 
       if (isDirectory) {
-        throw createFsError(
-          'EISDIR',
-          'cp',
-          srcStr,
-          'Directory copy across mounts not yet implemented'
-        );
-      }
+        if (!options?.recursive) {
+          throw createFsError('EISDIR', 'cp', srcStr, 'cp requires recursive for directories');
+        }
 
-      let data: Uint8Array;
-      if (srcMatch) {
-        data = await srcMatch.mount.stub.readFile(srcMatch.relativePath);
+        if (srcMatch && destMatch) {
+          await copyDirectoryRecursive(
+            srcMatch.mount.stub,
+            srcMatch.relativePath,
+            destMatch.mount.stub,
+            destMatch.relativePath
+          );
+        } else {
+          throw createFsError(
+            'EXDEV',
+            'cp',
+            srcStr,
+            'Directory copy across mount boundary not supported'
+          );
+        }
       } else {
-        const buffer = await realFs.readFile(src as any);
-        data = new Uint8Array(buffer);
-      }
-
-      if (destMatch) {
-        await destMatch.mount.stub.writeFile(destMatch.relativePath, data);
-      } else {
-        await realFs.writeFile(dest as any, data);
+        // File copy using streaming
+        if (srcMatch && destMatch) {
+          const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
+          const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
+          await pipeStreams(readStream, writeStream);
+        } else if (srcMatch) {
+          const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
+          const data = await collectStream(readStream);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          await realFs.writeFile(dest as any, data);
+        } else if (destMatch) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const buffer = await realFs.readFile(src as any);
+          const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
+          await writeToStream(writeStream, new Uint8Array(buffer));
+        }
       }
       return;
     }
@@ -467,9 +633,7 @@ export async function access(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      if (match.mount.stub.access) {
-        return match.mount.stub.access(match.relativePath, mode);
-      }
+      // Derive from stat - just check if it exists
       const s = await match.mount.stub.stat(match.relativePath);
       if (!s) {
         throw createFsError('ENOENT', 'access', pathStr);
@@ -488,10 +652,40 @@ export async function truncate(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      if (!match.mount.stub.truncate) {
-        throw createFsError('ENOSYS', 'truncate', pathStr, 'truncate not supported');
+      const length = len ?? 0;
+
+      // Derive truncate using streams
+      const srcStat = await match.mount.stub.stat(match.relativePath);
+      if (!srcStat) {
+        throw createFsError('ENOENT', 'truncate', pathStr);
       }
-      return match.mount.stub.truncate(match.relativePath, len ?? 0);
+      if (srcStat.type !== 'file') {
+        throw createFsError('EISDIR', 'truncate', pathStr);
+      }
+
+      let newData: Uint8Array;
+      if (length === 0) {
+        // Truncate to empty
+        newData = new Uint8Array(0);
+      } else if (length >= srcStat.size) {
+        // Extend with zeros
+        const readStream = await match.mount.stub.createReadStream(match.relativePath);
+        const existingData = await collectStream(readStream);
+        newData = new Uint8Array(length);
+        newData.set(existingData, 0);
+        // Rest is already zeros
+      } else {
+        // Truncate to smaller size - read only what we need
+        const readStream = await match.mount.stub.createReadStream(match.relativePath, {
+          start: 0,
+          end: length - 1,
+        });
+        newData = await collectStream(readStream);
+      }
+
+      const writeStream = await match.mount.stub.createWriteStream(match.relativePath);
+      await writeToStream(writeStream, newData);
+      return;
     }
   }
   return realFs.truncate(path, len);
@@ -579,16 +773,13 @@ export async function utimes(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      if (!match.mount.stub.setLastModified) {
-        throw createFsError('ENOSYS', 'utimes', pathStr, 'utimes not supported');
+      // utimes is not supported on mounted filesystems
+      // Just verify the file exists
+      const s = await match.mount.stub.stat(match.relativePath);
+      if (!s) {
+        throw createFsError('ENOENT', 'utimes', pathStr);
       }
-      const mtimeDate =
-        typeof mtime === 'number'
-          ? new Date(mtime * 1000)
-          : typeof mtime === 'string'
-            ? new Date(mtime)
-            : mtime;
-      return match.mount.stub.setLastModified(match.relativePath, mtimeDate);
+      return;
     }
   }
   return realFs.utimes(path, atime, mtime);

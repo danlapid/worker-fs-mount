@@ -122,7 +122,9 @@ export default class extends WorkerEntrypoint<Env> {
 
 ## Implementing a WorkerFilesystem
 
-Your entrypoint must implement the `WorkerFilesystem` interface. Here's a minimal in-memory example:
+Your entrypoint must implement the `WorkerFilesystem` interface. The interface is stream-first - you implement 6 core methods and higher-level operations like `readFile`/`writeFile` are automatically derived.
+
+Here's a minimal in-memory example:
 
 ```typescript
 import { WorkerEntrypoint } from 'cloudflare:workers';
@@ -141,22 +143,45 @@ export class MemoryFS extends WorkerEntrypoint implements WorkerFilesystem {
     return { type: 'file', size: file.length };
   }
 
-  async readFile(path: string): Promise<Uint8Array> {
+  async createReadStream(path: string, options?: { start?: number; end?: number }): Promise<ReadableStream<Uint8Array>> {
     const file = this.#files.get(path);
-    if (!file) throw new Error(`ENOENT: no such file: ${path}`);
-    return file;
+    if (!file) throw new Error(`ENOENT: ${path}`);
+    const start = options?.start ?? 0;
+    const end = options?.end !== undefined ? options.end + 1 : file.length;
+    const chunk = file.slice(start, end);
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(chunk);
+        controller.close();
+      },
+    });
   }
 
-  async writeFile(path: string, data: Uint8Array): Promise<number> {
-    this.#files.set(path, new Uint8Array(data));
-    return data.length;
+  async createWriteStream(path: string, options?: { start?: number; flags?: 'w' | 'a' | 'r+' }): Promise<WritableStream<Uint8Array>> {
+    const self = this;
+    let offset = options?.start ?? 0;
+    let content = options?.flags === 'a' || options?.flags === 'r+'
+      ? (this.#files.get(path) ?? new Uint8Array(0))
+      : new Uint8Array(0);
+    if (options?.flags === 'a') offset = content.length;
+
+    return new WritableStream({
+      write(chunk) {
+        const newLength = Math.max(content.length, offset + chunk.length);
+        const newContent = new Uint8Array(newLength);
+        newContent.set(content, 0);
+        newContent.set(chunk, offset);
+        content = newContent;
+        offset += chunk.length;
+        self.#files.set(path, content);
+      },
+    });
   }
 
   async readdir(path: string): Promise<DirEntry[]> {
     const prefix = path === '/' ? '/' : path + '/';
     const entries: DirEntry[] = [];
     const seen = new Set<string>();
-
     for (const [filePath] of this.#files) {
       if (filePath.startsWith(prefix)) {
         const name = filePath.slice(prefix.length).split('/')[0];
@@ -178,12 +203,6 @@ export class MemoryFS extends WorkerEntrypoint implements WorkerFilesystem {
   async rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
     if (!this.#files.delete(path) && !this.#dirs.delete(path)) {
       if (!options?.force) throw new Error(`ENOENT: ${path}`);
-    }
-  }
-
-  async unlink(path: string): Promise<void> {
-    if (!this.#files.delete(path)) {
-      throw new Error(`ENOENT: ${path}`);
     }
   }
 }
@@ -238,33 +257,40 @@ Check if code is running inside a `withMounts` callback.
 
 ## WorkerFilesystem Interface
 
-### Required Methods
+The interface is stream-first with minimal required methods. Higher-level operations like `readFile`, `writeFile`, `truncate`, `rename`, `cp`, and `unlink` are automatically derived from these core methods.
+
+### Required Methods (6)
 
 | Method | Description |
 |--------|-------------|
 | `stat(path, options?)` | Get file/directory metadata |
-| `readFile(path)` | Read entire file as `Uint8Array` |
-| `writeFile(path, data, options?)` | Write entire file |
+| `createReadStream(path, options?)` | Create readable stream for a file |
+| `createWriteStream(path, options?)` | Create writable stream for a file |
 | `readdir(path, options?)` | List directory contents |
 | `mkdir(path, options?)` | Create directory |
 | `rm(path, options?)` | Remove file or directory |
-| `unlink(path)` | Remove file |
 
-### Optional Methods
+### Optional Methods (2)
 
 | Method | Description |
 |--------|-------------|
-| `read(path, {offset, length})` | Read chunk at offset |
-| `write(path, data, {offset})` | Write at offset |
-| `createReadStream(path, options?)` | Get readable stream |
-| `createWriteStream(path, options?)` | Get writable stream |
-| `truncate(path, length?)` | Truncate file |
-| `rename(oldPath, newPath)` | Move file/directory |
-| `cp(src, dest, options?)` | Copy file/directory |
 | `symlink(linkPath, targetPath)` | Create symlink |
 | `readlink(path)` | Read symlink target |
-| `access(path, mode?)` | Check accessibility |
-| `setLastModified(path, mtime)` | Update modification time |
+
+### Automatically Derived Operations
+
+These `node:fs/promises` methods are automatically implemented using the core streaming methods:
+
+| Method | Derived From |
+|--------|--------------|
+| `readFile` | `createReadStream` |
+| `writeFile` | `createWriteStream` |
+| `appendFile` | `createWriteStream` with append flag |
+| `truncate` | `createReadStream` + `createWriteStream` |
+| `unlink` | `stat` + `rm` |
+| `copyFile`, `cp` | `createReadStream` + `createWriteStream` |
+| `rename` | streams + `rm` |
+| `access` | `stat` |
 
 ## Supported fs Operations
 
