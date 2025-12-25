@@ -33,7 +33,7 @@ handle.unmount();
 - `path: string` - The mount point (must start with `/`)
 - `stub: WorkerFilesystem` - A WorkerEntrypoint stub (from `ctx.exports`, `env.SERVICE`, or DO stub)
 
-**Returns:** `MountHandle` with `unmount()` method and `path` property.
+**Returns:** `void`
 
 ### How It Works
 
@@ -202,7 +202,7 @@ interface Mount {
 
 const mounts = new Map<string, Mount>();
 
-export function mount(path: string, stub: WorkerFilesystem): MountHandle {
+export function mount(path: string, stub: WorkerFilesystem): void {
   const normalized = normalizePath(path);
 
   if (!normalized.startsWith('/')) {
@@ -221,13 +221,6 @@ export function mount(path: string, stub: WorkerFilesystem): MountHandle {
   }
 
   mounts.set(normalized, { path: normalized, stub });
-
-  return {
-    path: normalized,
-    unmount() {
-      mounts.delete(normalized);
-    }
-  };
 }
 
 export function findMount(path: string): { mount: Mount; relativePath: string } | null {
@@ -493,7 +486,7 @@ function toDirent(e: DirEntry, parentPath: string): any {
 import './patch';
 
 export { mount } from './registry';
-export type { WorkerFilesystem, Stat, DirEntry, MountHandle } from './types';
+export type { WorkerFilesystem, Stat, DirEntry } from './types';
 ```
 
 ## Constraints

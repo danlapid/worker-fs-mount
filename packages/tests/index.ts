@@ -5,12 +5,12 @@ import type { Dirent } from 'node:fs';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
 import { DurableObjectFilesystem } from 'durable-object-fs';
-import { MemoryFilesystemEntrypoint } from 'memory-fs';
+import { MemoryFilesystem } from 'memory-fs';
 import { R2Filesystem } from 'r2-fs';
 import { isInMountContext, isMounted, mount, withMounts } from 'worker-fs-mount';
 
 // Re-export classes to make them available via ctx.exports
-export { DurableObjectFilesystem, MemoryFilesystemEntrypoint };
+export { DurableObjectFilesystem, MemoryFilesystem };
 
 // Helper to wrap async operations and catch errors properly
 async function safeCall<T>(fn: () => Promise<T>): Promise<{ result?: T; error?: string }> {
@@ -193,11 +193,11 @@ export default {
           const memEndpoint = endpoint.slice(4); // Remove '/mem' prefix
           const body = (await request.json()) as any;
 
-          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystemEntrypoint);
+          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystem);
 
           // Special: reset clears in-memory state instead of deleting files
           if (memEndpoint === '/reset') {
-            MemoryFilesystemEntrypoint.resetState();
+            MemoryFilesystem.resetState();
             return Response.json({ ok: true });
           }
 
@@ -245,12 +245,12 @@ export default {
         // Utility Endpoints
         // ============================================
         if (endpoint === '/setup') {
-          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystemEntrypoint);
+          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystem);
           return Response.json({ ok: true, mounted: MEM_MOUNT_PATH });
         }
 
         if (endpoint === '/isMounted') {
-          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystemEntrypoint);
+          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystem);
           const body = (await request.json()) as { path: string };
           return Response.json({ ok: true, mounted: isMounted(body.path) });
         }
@@ -260,7 +260,7 @@ export default {
         }
 
         if (endpoint === '/readFileFullPath') {
-          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystemEntrypoint);
+          mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystem);
           const body = (await request.json()) as { fullPath: string };
           const { result: content, error } = await safeCall(() =>
             fs.readFile(body.fullPath, 'utf8')
@@ -277,7 +277,7 @@ export default {
 
           if (body.action === 'mount') {
             try {
-              mount('/isolation/test', ctx.exports.MemoryFilesystemEntrypoint);
+              mount('/isolation/test', ctx.exports.MemoryFilesystem);
               return Response.json({
                 ok: true,
                 id: body.id,
@@ -306,7 +306,7 @@ export default {
         if (endpoint === '/isolation/concurrent') {
           const body = (await request.json()) as { id: string; delay?: number };
 
-          mount('/concurrent', ctx.exports.MemoryFilesystemEntrypoint);
+          mount('/concurrent', ctx.exports.MemoryFilesystem);
           await fs.writeFile('/concurrent/id.txt', body.id);
 
           if (body.delay) {

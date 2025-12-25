@@ -1,9 +1,6 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 
-// Re-export types for convenience
-export type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
-
 /**
  * A file node in the in-memory filesystem.
  */
@@ -36,57 +33,22 @@ interface SymlinkNode {
 /**
  * A node in the in-memory filesystem.
  */
-export type FsNode = FileNode | DirectoryNode | SymlinkNode;
+type FsNode = FileNode | DirectoryNode | SymlinkNode;
 
 /**
  * The state backing the in-memory filesystem.
- * This is a Map from normalized paths to nodes.
  */
-export type MemoryFilesystemState = Map<string, FsNode>;
-
-/**
- * Create a new, empty filesystem state with just a root directory.
- */
-export function createMemoryFilesystemState(): MemoryFilesystemState {
-  const state: MemoryFilesystemState = new Map();
-  const now = new Date();
-  state.set('/', {
-    type: 'directory',
-    lastModified: now,
-    created: now,
-  });
-  return state;
-}
-
-/**
- * Reset a filesystem state to empty (just root directory).
- */
-export function resetMemoryFilesystemState(state: MemoryFilesystemState): void {
-  state.clear();
-  const now = new Date();
-  state.set('/', {
-    type: 'directory',
-    lastModified: now,
-    created: now,
-  });
-}
+type MemoryFilesystemState = Map<string, FsNode>;
 
 /**
  * Error codes used by the filesystem.
  */
-export type FsErrorCode =
-  | 'ENOENT'
-  | 'EEXIST'
-  | 'EISDIR'
-  | 'ENOTDIR'
-  | 'ENOTEMPTY'
-  | 'EINVAL'
-  | 'ELOOP';
+type FsErrorCode = 'ENOENT' | 'EEXIST' | 'EISDIR' | 'ENOTDIR' | 'ENOTEMPTY' | 'EINVAL' | 'ELOOP';
 
 /**
  * Create a filesystem error with a POSIX-style error code.
  */
-export function createFsError(code: FsErrorCode, path: string): Error {
+function createFsError(code: FsErrorCode, path: string): Error {
   const messages: Record<FsErrorCode, string> = {
     ENOENT: 'no such file or directory',
     EEXIST: 'file already exists',
@@ -102,7 +64,7 @@ export function createFsError(code: FsErrorCode, path: string): Error {
 /**
  * Normalize a path by collapsing multiple slashes and removing trailing slashes.
  */
-export function normalizePath(path: string): string {
+function normalizePath(path: string): string {
   let normalized = path.replace(/\/+/g, '/');
   if (normalized !== '/' && normalized.endsWith('/')) {
     normalized = normalized.slice(0, -1);
@@ -116,7 +78,7 @@ export function normalizePath(path: string): string {
 /**
  * Get the parent directory path.
  */
-export function getParentPath(path: string): string {
+function getParentPath(path: string): string {
   const normalized = normalizePath(path);
   const lastSlash = normalized.lastIndexOf('/');
   if (lastSlash <= 0) return '/';
@@ -124,64 +86,65 @@ export function getParentPath(path: string): string {
 }
 
 /**
- * Get the base name from a path.
+ * Create a new, empty filesystem state with just a root directory.
  */
-export function getBaseName(path: string): string {
-  const normalized = normalizePath(path);
-  const lastSlash = normalized.lastIndexOf('/');
-  return normalized.slice(lastSlash + 1);
+function createMemoryFilesystemState(): MemoryFilesystemState {
+  const state: MemoryFilesystemState = new Map();
+  const now = new Date();
+  state.set('/', {
+    type: 'directory',
+    lastModified: now,
+    created: now,
+  });
+  return state;
 }
 
 /**
- * An in-memory filesystem implementation.
- * Can be used directly or extended in a WorkerEntrypoint.
+ * Reset a filesystem state to empty (just root directory).
+ */
+function resetMemoryFilesystemState(state: MemoryFilesystemState): void {
+  state.clear();
+  const now = new Date();
+  state.set('/', {
+    type: 'directory',
+    lastModified: now,
+    created: now,
+  });
+}
+
+/**
+ * An in-memory filesystem WorkerEntrypoint.
+ * Re-export this class from your worker to make it available via ctx.exports.
  *
  * @example
  * ```typescript
- * import { MemoryFilesystem, createMemoryFilesystemState } from 'memory-fs';
+ * import { MemoryFilesystem } from 'memory-fs';
  * import { mount, withMounts } from 'worker-fs-mount';
  * import fs from 'node:fs/promises';
  *
- * // Create shared state (persists across requests if at module level)
- * const state = createMemoryFilesystemState();
+ * // Re-export to make available via ctx.exports
+ * export { MemoryFilesystem };
  *
  * export default {
- *   async fetch(request: Request) {
+ *   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
  *     return withMounts(async () => {
- *       const memfs = new MemoryFilesystem(state);
- *       mount('/mem', memfs);
- *
- *       await fs.writeFile('/mem/hello.txt', 'Hello, World!');
- *       const content = await fs.readFile('/mem/hello.txt', 'utf8');
- *       return new Response(content);
+ *       mount('/mem', ctx.exports.MemoryFilesystem);
+ *       await fs.writeFile('/mem/hello.txt', 'Hello!');
+ *       return new Response(await fs.readFile('/mem/hello.txt', 'utf8'));
  *     });
  *   }
  * }
  * ```
  */
-export class MemoryFilesystem implements WorkerFilesystem {
-  private readonly nodes: MemoryFilesystemState;
+export class MemoryFilesystem extends WorkerEntrypoint implements WorkerFilesystem {
+  private static sharedState: MemoryFilesystemState = createMemoryFilesystemState();
+  private readonly nodes: MemoryFilesystemState = MemoryFilesystem.sharedState;
 
   /**
-   * Create a new MemoryFilesystem.
-   * @param state - Optional state map. If not provided, creates a new empty state.
+   * Reset the shared filesystem state. Useful for testing.
    */
-  constructor(state?: MemoryFilesystemState) {
-    this.nodes = state ?? createMemoryFilesystemState();
-  }
-
-  /**
-   * Get the underlying state map.
-   */
-  getState(): MemoryFilesystemState {
-    return this.nodes;
-  }
-
-  /**
-   * Reset the filesystem to empty state.
-   */
-  reset(): void {
-    resetMemoryFilesystemState(this.nodes);
+  static resetState(): void {
+    resetMemoryFilesystemState(MemoryFilesystem.sharedState);
   }
 
   private resolveSymlink(path: string, depth = 0): string {
@@ -628,134 +591,5 @@ export class MemoryFilesystem implements WorkerFilesystem {
     if (!node) {
       throw createFsError('ENOENT', path);
     }
-  }
-}
-
-/**
- * A WorkerEntrypoint that wraps MemoryFilesystem for use with ctx.exports.
- * Re-export this class from your worker to make it available via ctx.exports.
- *
- * @example
- * ```typescript
- * import { MemoryFilesystemEntrypoint, createMemoryFilesystemState } from 'memory-fs';
- * import { mount, withMounts } from 'worker-fs-mount';
- * import fs from 'node:fs/promises';
- *
- * // Module-level state for persistence across requests
- * const memoryState = createMemoryFilesystemState();
- *
- * // Re-export to make available via ctx.exports
- * export { MemoryFilesystemEntrypoint };
- *
- * export default {
- *   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
- *     return withMounts(async () => {
- *       mount('/mem', ctx.exports.MemoryFilesystemEntrypoint);
- *       await fs.writeFile('/mem/hello.txt', 'Hello!');
- *       return new Response(await fs.readFile('/mem/hello.txt', 'utf8'));
- *     });
- *   }
- * }
- * ```
- */
-export class MemoryFilesystemEntrypoint extends WorkerEntrypoint implements WorkerFilesystem {
-  private static sharedState: MemoryFilesystemState = createMemoryFilesystemState();
-  private fs = new MemoryFilesystem(MemoryFilesystemEntrypoint.sharedState);
-
-  /**
-   * Reset the shared filesystem state. Useful for testing.
-   */
-  static resetState(): void {
-    resetMemoryFilesystemState(MemoryFilesystemEntrypoint.sharedState);
-  }
-
-  /**
-   * Get the shared filesystem state.
-   */
-  static getState(): MemoryFilesystemState {
-    return MemoryFilesystemEntrypoint.sharedState;
-  }
-
-  // Implement WorkerFilesystem interface by delegating to the underlying MemoryFilesystem
-  stat(path: string, options?: { followSymlinks?: boolean }): Promise<Stat | null> {
-    return this.fs.stat(path, options);
-  }
-
-  setLastModified(path: string, mtime: Date): Promise<void> {
-    return this.fs.setLastModified(path, mtime);
-  }
-
-  readFile(path: string): Promise<Uint8Array> {
-    return this.fs.readFile(path);
-  }
-
-  writeFile(
-    path: string,
-    data: Uint8Array,
-    options?: { append?: boolean; exclusive?: boolean }
-  ): Promise<number> {
-    return this.fs.writeFile(path, data, options);
-  }
-
-  read(path: string, options: { offset: number; length: number }): Promise<Uint8Array> {
-    return this.fs.read(path, options);
-  }
-
-  write(path: string, data: Uint8Array, options: { offset: number }): Promise<number> {
-    return this.fs.write(path, data, options);
-  }
-
-  createReadStream(
-    path: string,
-    options?: { start?: number; end?: number }
-  ): Promise<ReadableStream<Uint8Array>> {
-    return this.fs.createReadStream(path, options);
-  }
-
-  createWriteStream(
-    path: string,
-    options?: { start?: number; flags?: 'w' | 'a' | 'r+' }
-  ): Promise<WritableStream<Uint8Array>> {
-    return this.fs.createWriteStream(path, options);
-  }
-
-  truncate(path: string, length?: number): Promise<void> {
-    return this.fs.truncate(path, length);
-  }
-
-  readdir(path: string, options?: { recursive?: boolean }): Promise<DirEntry[]> {
-    return this.fs.readdir(path, options);
-  }
-
-  mkdir(path: string, options?: { recursive?: boolean }): Promise<string | undefined> {
-    return this.fs.mkdir(path, options);
-  }
-
-  rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
-    return this.fs.rm(path, options);
-  }
-
-  symlink(linkPath: string, targetPath: string): Promise<void> {
-    return this.fs.symlink(linkPath, targetPath);
-  }
-
-  readlink(path: string): Promise<string> {
-    return this.fs.readlink(path);
-  }
-
-  unlink(path: string): Promise<void> {
-    return this.fs.unlink(path);
-  }
-
-  rename(oldPath: string, newPath: string): Promise<void> {
-    return this.fs.rename(oldPath, newPath);
-  }
-
-  cp(src: string, dest: string, options?: { recursive?: boolean }): Promise<void> {
-    return this.fs.cp(src, dest, options);
-  }
-
-  access(path: string, mode?: number): Promise<void> {
-    return this.fs.access(path, mode);
   }
 }

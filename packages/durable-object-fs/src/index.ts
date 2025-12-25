@@ -4,11 +4,6 @@ import { createFsError } from './errors.js';
 import { getBaseName, getParentPath, normalizePath, resolvePath } from './path-utils.js';
 import { type DbEntry, initializeSchema } from './schema.js';
 
-// Re-export types for convenience
-export type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
-export { createFsError } from './errors.js';
-export { getBaseName, getParentPath, normalizePath } from './path-utils.js';
-
 /**
  * A Durable Object that implements a filesystem using SQLite storage.
  * Can be mounted via worker-fs-mount to provide persistent filesystem storage.

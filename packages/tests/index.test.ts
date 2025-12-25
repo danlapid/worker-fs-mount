@@ -491,7 +491,7 @@ describe('worker-fs-mount integration tests', () => {
   // ============================================
 
   describe('worker setup', () => {
-    it('should setup mount using ctx.exports.MemoryFilesystemEntrypoint', async () => {
+    it('should setup mount using ctx.exports.MemoryFilesystem', async () => {
       const res = await workerFetch('/setup');
       const data = (await res.json()) as any;
       expect(data.ok).toBe(true);

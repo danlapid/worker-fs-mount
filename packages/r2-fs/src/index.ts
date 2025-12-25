@@ -2,11 +2,6 @@ import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 import { createFsError } from './errors.js';
 import { getParentPath, normalizePath, pathToKey, resolvePath } from './path-utils.js';
 
-// Re-export types for convenience
-export type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
-export { createFsError } from './errors.js';
-export { getBaseName, getParentPath, keyToPath, normalizePath, pathToKey } from './path-utils.js';
-
 /**
  * Metadata stored in R2 customMetadata for each object.
  */

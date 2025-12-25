@@ -18,16 +18,6 @@ export interface DirEntry {
 }
 
 /**
- * Handle returned by mount() to manage the mount lifecycle.
- */
-export interface MountHandle {
-  /** The normalized mount path */
-  readonly path: string;
-  /** Unmount the filesystem */
-  unmount(): void;
-}
-
-/**
  * Interface that WorkerEntrypoints must implement to be mountable.
  * All methods are optional except the core ones.
  */

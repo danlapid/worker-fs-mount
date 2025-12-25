@@ -196,7 +196,7 @@ For a production implementation backed by R2, KV, or a database, see the example
 
 ## API Reference
 
-### `mount(path, stub): MountHandle`
+### `mount(path, stub): void`
 
 Mount a WorkerFilesystem at the specified path.
 
@@ -205,9 +205,15 @@ Mount a WorkerFilesystem at the specified path.
 | `path` | `string` | Mount point (must be absolute, start with `/`) |
 | `stub` | `WorkerFilesystem` | WorkerEntrypoint stub |
 
-Returns a `MountHandle` with:
-- `path: string` - The normalized mount path
-- `unmount(): void` - Remove the mount
+### `unmount(path): boolean`
+
+Unmount a filesystem at the specified path.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `path` | `string` | Mount point to unmount |
+
+Returns `true` if a mount was removed, `false` if nothing was mounted at that path.
 
 ### `findMount(path): MountMatch | null`
 

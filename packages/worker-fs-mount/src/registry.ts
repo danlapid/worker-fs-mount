@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { Mount, MountHandle, MountMatch, WorkerFilesystem } from './types.js';
+import type { Mount, MountMatch, WorkerFilesystem } from './types.js';
 
 /**
  * AsyncLocalStorage for request-scoped mounts.
@@ -101,7 +101,6 @@ export function withMounts<T>(fn: () => T): T {
  *
  * @param path - The mount point (must be absolute, starting with /)
  * @param stub - The WorkerFilesystem implementation to mount
- * @returns A MountHandle to manage the mount lifecycle
  *
  * @example
  * ```typescript
@@ -109,15 +108,12 @@ export function withMounts<T>(fn: () => T): T {
  *
  * // Recommended: use withMounts for request isolation
  * withMounts(() => {
- *   const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
+ *   mount('/mnt/storage', env.STORAGE_SERVICE);
  *   // ... use fs operations ...
  * });
- *
- * // Legacy: works but not isolated between concurrent requests
- * const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
  * ```
  */
-export function mount(path: string, stub: WorkerFilesystem): MountHandle {
+export function mount(path: string, stub: WorkerFilesystem): void {
   const mounts = getMountRegistry();
   const normalized = normalizePath(path);
 
@@ -138,13 +134,6 @@ export function mount(path: string, stub: WorkerFilesystem): MountHandle {
   }
 
   mounts.set(normalized, { path: normalized, stub });
-
-  return {
-    path: normalized,
-    unmount() {
-      mounts.delete(normalized);
-    },
-  };
 }
 
 /**
