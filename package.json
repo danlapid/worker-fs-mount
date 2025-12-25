@@ -1,53 +1,13 @@
 {
-  "name": "worker-fs-mount",
-  "version": "0.1.0",
-  "description": "Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers",
+  "name": "worker-fs-mount-monorepo",
+  "private": true,
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
-    },
-    "./fs": {
-      "types": "./dist/fs-promises.d.ts",
-      "import": "./dist/fs-promises.js",
-      "require": "./dist/fs-promises.js"
-    }
-  },
-  "files": [
-    "dist",
-    "src"
-  ],
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run build && vitest run --config tests/vitest.config.ts",
-    "test:watch": "vitest --config tests/vitest.config.ts"
-  },
-  "keywords": [
-    "cloudflare",
-    "workers",
-    "filesystem",
-    "mount",
-    "vfs",
-    "jsrpc"
-  ],
-  "author": "Cloudflare",
-  "license": "MIT",
-  "devDependencies": {
-    "@cloudflare/workers-types": "^4.20251225.0",
-    "@types/node": "^25.0.3",
-    "typescript": "^5.7.2",
-    "vitest": "~3.2.0",
-    "wrangler": "^4.56.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "build": "pnpm -r --filter=worker-fs-mount run build",
+    "dev": "pnpm -r --filter=worker-fs-mount run dev",
+    "clean": "pnpm -r run clean",
+    "typecheck": "pnpm -r --filter=worker-fs-mount run typecheck",
+    "test": "pnpm run build && pnpm -r --filter=worker-fs-mount-tests run test",
+    "test:watch": "pnpm -r --filter=worker-fs-mount-tests run test:watch"
   }
 }

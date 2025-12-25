@@ -1,0 +1,17 @@
+{
+  "name": "worker-fs-mount-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "worker-fs-mount": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251225.0",
+    "vitest": "~3.2.0",
+    "wrangler": "^4.56.0"
+  }
+}
