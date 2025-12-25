@@ -27,7 +27,41 @@ importers:
         specifier: ^4.56.0
         version: 4.56.0(@cloudflare/workers-types@4.20251225.0)
 
+  examples/r2-backed-fs:
+    dependencies:
+      r2-fs:
+        specifier: workspace:*
+        version: link:../../packages/r2-fs
+      worker-fs-mount:
+        specifier: workspace:*
+        version: link:../../packages/worker-fs-mount
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.21
+        version: 22.19.3
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      wrangler:
+        specifier: ^4.56.0
+        version: 4.56.0(@cloudflare/workers-types@4.20251225.0)
+
   packages/durable-object-fs:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20251225.0
+        version: 4.20251225.0
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      worker-fs-mount:
+        specifier: workspace:*
+        version: link:../worker-fs-mount
+
+  packages/r2-fs:
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^4.20251225.0
@@ -47,6 +81,9 @@ importers:
       durable-object-fs:
         specifier: workspace:*
         version: link:../durable-object-fs
+      r2-fs:
+        specifier: workspace:*
+        version: link:../r2-fs
       worker-fs-mount:
         specifier: workspace:*
         version: link:../worker-fs-mount

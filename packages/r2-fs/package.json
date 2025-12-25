@@ -1,0 +1,47 @@
+{
+  "name": "r2-fs",
+  "version": "0.1.0",
+  "description": "R2-backed filesystem for Cloudflare Workers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run clean && npm run build",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [
+    "cloudflare",
+    "workers",
+    "r2",
+    "filesystem",
+    "storage"
+  ],
+  "author": "Cloudflare",
+  "license": "MIT",
+  "peerDependencies": {
+    "worker-fs-mount": "workspace:*"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20251225.0",
+    "@types/node": "^25.0.3",
+    "typescript": "^5.7.2",
+    "worker-fs-mount": "workspace:*"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

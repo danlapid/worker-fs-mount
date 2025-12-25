@@ -852,6 +852,317 @@ describe('worker-fs-mount integration tests', () => {
   });
 
   // ============================================
+  // R2 Filesystem Tests
+  // ============================================
+
+  describe('R2 filesystem', () => {
+    // Helper for R2 requests
+    async function r2Fetch(endpoint: string, body?: object): Promise<Response> {
+      return fetch(`http://localhost:${TEST_PORT}/r2${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: body ? JSON.stringify(body) : JSON.stringify({}),
+      });
+    }
+
+    async function r2Reset(): Promise<void> {
+      await r2Fetch('/reset', {});
+    }
+
+    beforeEach(async () => {
+      await r2Reset();
+    });
+
+    describe('file operations', () => {
+      it('should write and read file', async () => {
+        const writeRes = await r2Fetch('/writeFile', {
+          path: '/hello.txt',
+          content: 'Hello from R2!',
+        });
+        const writeData = (await writeRes.json()) as any;
+        expect(writeData.ok).toBe(true);
+
+        const readRes = await r2Fetch('/readFile', { path: '/hello.txt' });
+        const readData = (await readRes.json()) as any;
+        expect(readData.ok).toBe(true);
+        expect(readData.content).toBe('Hello from R2!');
+      });
+
+      it('should overwrite existing file', async () => {
+        await r2Fetch('/writeFile', { path: '/file.txt', content: 'First' });
+        await r2Fetch('/writeFile', { path: '/file.txt', content: 'Second' });
+
+        const res = await r2Fetch('/readFile', { path: '/file.txt' });
+        const data = (await res.json()) as any;
+        expect(data.content).toBe('Second');
+      });
+
+      it('should append to file with append option', async () => {
+        await r2Fetch('/writeFile', { path: '/log.txt', content: 'Line 1\n' });
+        await r2Fetch('/writeFile', {
+          path: '/log.txt',
+          content: 'Line 2\n',
+          options: { append: true },
+        });
+
+        const res = await r2Fetch('/readFile', { path: '/log.txt' });
+        const data = (await res.json()) as any;
+        expect(data.content).toBe('Line 1\nLine 2\n');
+      });
+
+      it('should fail with exclusive flag if file exists', async () => {
+        await r2Fetch('/writeFile', { path: '/exists.txt', content: 'data' });
+        const res = await r2Fetch('/writeFile', {
+          path: '/exists.txt',
+          content: 'new',
+          options: { exclusive: true },
+        });
+        expect(res.status).toBe(500);
+        const data = (await res.json()) as any;
+        expect(data.error).toContain('EEXIST');
+      });
+
+      it('should return error for non-existent file', async () => {
+        const res = await r2Fetch('/readFile', { path: '/nonexistent.txt' });
+        expect(res.status).toBe(500);
+        const data = (await res.json()) as any;
+        expect(data.error).toContain('ENOENT');
+      });
+    });
+
+    describe('directory operations', () => {
+      it('should create and list directory', async () => {
+        await r2Fetch('/mkdir', { path: '/mydir' });
+        await r2Fetch('/writeFile', { path: '/mydir/file.txt', content: 'data' });
+
+        const res = await r2Fetch('/readdir', { path: '/mydir' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.entries).toHaveLength(1);
+        expect(data.entries[0].name).toBe('file.txt');
+      });
+
+      it('should create nested directories with recursive', async () => {
+        const res = await r2Fetch('/mkdir', { path: '/a/b/c', options: { recursive: true } });
+        expect(((await res.json()) as any).ok).toBe(true);
+
+        const statRes = await r2Fetch('/stat', { path: '/a/b/c' });
+        const statData = (await statRes.json()) as any;
+        expect(statData.stat.type).toBe('directory');
+      });
+
+      it('should throw ENOENT without recursive for nested path', async () => {
+        const res = await r2Fetch('/mkdir', { path: '/x/y/z' });
+        expect(res.status).toBe(500);
+        const data = (await res.json()) as any;
+        expect(data.error).toContain('ENOENT');
+      });
+
+      it('should list root directory', async () => {
+        await r2Fetch('/writeFile', { path: '/root-file.txt', content: 'data' });
+        await r2Fetch('/mkdir', { path: '/root-dir' });
+
+        const res = await r2Fetch('/readdir', { path: '/' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        const names = data.entries.map((e: any) => e.name);
+        expect(names).toContain('root-file.txt');
+        expect(names).toContain('root-dir');
+      });
+    });
+
+    describe('stat operations', () => {
+      it('should stat file', async () => {
+        await r2Fetch('/writeFile', { path: '/file.txt', content: 'content' });
+
+        const res = await r2Fetch('/stat', { path: '/file.txt' });
+        const data = (await res.json()) as any;
+        expect(data.stat.type).toBe('file');
+        expect(data.stat.size).toBe(7);
+      });
+
+      it('should stat directory', async () => {
+        await r2Fetch('/mkdir', { path: '/dir' });
+
+        const res = await r2Fetch('/stat', { path: '/dir' });
+        const data = (await res.json()) as any;
+        expect(data.stat.type).toBe('directory');
+      });
+
+      it('should return null for non-existent path', async () => {
+        const res = await r2Fetch('/stat', { path: '/nonexistent' });
+        const data = (await res.json()) as any;
+        expect(data.stat).toBeNull();
+      });
+    });
+
+    describe('remove operations', () => {
+      it('should remove file', async () => {
+        await r2Fetch('/writeFile', { path: '/file.txt', content: 'data' });
+        await r2Fetch('/rm', { path: '/file.txt' });
+
+        const statRes = await r2Fetch('/stat', { path: '/file.txt' });
+        expect(((await statRes.json()) as any).stat).toBeNull();
+      });
+
+      it('should remove directory recursively', async () => {
+        await r2Fetch('/mkdir', { path: '/dir' });
+        await r2Fetch('/writeFile', { path: '/dir/file.txt', content: 'data' });
+        await r2Fetch('/rm', { path: '/dir', options: { recursive: true } });
+
+        const statRes = await r2Fetch('/stat', { path: '/dir' });
+        expect(((await statRes.json()) as any).stat).toBeNull();
+      });
+
+      it('should throw ENOTEMPTY without recursive', async () => {
+        await r2Fetch('/mkdir', { path: '/dir' });
+        await r2Fetch('/writeFile', { path: '/dir/file.txt', content: 'data' });
+
+        const res = await r2Fetch('/rm', { path: '/dir' });
+        expect(res.status).toBe(500);
+        const data = (await res.json()) as any;
+        expect(data.error).toContain('ENOTEMPTY');
+      });
+
+      it('should unlink file', async () => {
+        await r2Fetch('/writeFile', { path: '/file.txt', content: 'data' });
+        await r2Fetch('/unlink', { path: '/file.txt' });
+
+        const statRes = await r2Fetch('/stat', { path: '/file.txt' });
+        expect(((await statRes.json()) as any).stat).toBeNull();
+      });
+
+      it('should throw EISDIR when unlinking directory', async () => {
+        await r2Fetch('/mkdir', { path: '/dir' });
+        const res = await r2Fetch('/unlink', { path: '/dir' });
+        expect(res.status).toBe(500);
+        const data = (await res.json()) as any;
+        expect(data.error).toContain('EISDIR');
+      });
+    });
+
+    describe('rename operations', () => {
+      it('should rename file', async () => {
+        await r2Fetch('/writeFile', { path: '/old.txt', content: 'content' });
+        await r2Fetch('/rename', { oldPath: '/old.txt', newPath: '/new.txt' });
+
+        const oldStatRes = await r2Fetch('/stat', { path: '/old.txt' });
+        expect(((await oldStatRes.json()) as any).stat).toBeNull();
+
+        const readRes = await r2Fetch('/readFile', { path: '/new.txt' });
+        expect(((await readRes.json()) as any).content).toBe('content');
+      });
+
+      it('should rename directory with contents', async () => {
+        await r2Fetch('/mkdir', { path: '/olddir' });
+        await r2Fetch('/writeFile', { path: '/olddir/file.txt', content: 'data' });
+        await r2Fetch('/rename', { oldPath: '/olddir', newPath: '/newdir' });
+
+        const readRes = await r2Fetch('/readFile', { path: '/newdir/file.txt' });
+        expect(((await readRes.json()) as any).content).toBe('data');
+      });
+    });
+
+    describe('copy operations', () => {
+      it('should copy file', async () => {
+        await r2Fetch('/writeFile', { path: '/source.txt', content: 'copy me' });
+        await r2Fetch('/cp', { src: '/source.txt', dest: '/dest.txt' });
+
+        const srcRes = await r2Fetch('/readFile', { path: '/source.txt' });
+        const destRes = await r2Fetch('/readFile', { path: '/dest.txt' });
+
+        expect(((await srcRes.json()) as any).content).toBe('copy me');
+        expect(((await destRes.json()) as any).content).toBe('copy me');
+      });
+
+      it('should copy directory recursively', async () => {
+        await r2Fetch('/mkdir', { path: '/srcdir' });
+        await r2Fetch('/writeFile', { path: '/srcdir/a.txt', content: 'file a' });
+        await r2Fetch('/mkdir', { path: '/srcdir/sub' });
+        await r2Fetch('/writeFile', { path: '/srcdir/sub/b.txt', content: 'file b' });
+
+        await r2Fetch('/cp', { src: '/srcdir', dest: '/destdir', options: { recursive: true } });
+
+        const aRes = await r2Fetch('/readFile', { path: '/destdir/a.txt' });
+        const bRes = await r2Fetch('/readFile', { path: '/destdir/sub/b.txt' });
+
+        expect(((await aRes.json()) as any).content).toBe('file a');
+        expect(((await bRes.json()) as any).content).toBe('file b');
+      });
+    });
+
+    describe('symlink operations', () => {
+      it('should create and read symlink', async () => {
+        await r2Fetch('/writeFile', { path: '/target.txt', content: 'target' });
+        await r2Fetch('/symlink', { linkPath: '/link.txt', targetPath: '/target.txt' });
+
+        const statRes = await r2Fetch('/stat', {
+          path: '/link.txt',
+          options: { followSymlinks: false },
+        });
+        expect(((await statRes.json()) as any).stat.type).toBe('symlink');
+      });
+
+      it('should read through symlink', async () => {
+        await r2Fetch('/writeFile', { path: '/target.txt', content: 'symlink content' });
+        await r2Fetch('/symlink', { linkPath: '/link.txt', targetPath: '/target.txt' });
+
+        const res = await r2Fetch('/readFile', { path: '/link.txt' });
+        expect(((await res.json()) as any).content).toBe('symlink content');
+      });
+
+      it('should readlink', async () => {
+        await r2Fetch('/symlink', { linkPath: '/link.txt', targetPath: '/target.txt' });
+
+        const res = await r2Fetch('/readlink', { path: '/link.txt' });
+        expect(((await res.json()) as any).target).toBe('/target.txt');
+      });
+    });
+
+    describe('truncate operations', () => {
+      it('should truncate file', async () => {
+        await r2Fetch('/writeFile', { path: '/file.txt', content: '1234567890' });
+        await r2Fetch('/truncate', { path: '/file.txt', length: 5 });
+
+        const res = await r2Fetch('/readFile', { path: '/file.txt' });
+        expect(((await res.json()) as any).content).toBe('12345');
+      });
+    });
+
+    describe('access operations', () => {
+      it('should succeed for existing file', async () => {
+        await r2Fetch('/writeFile', { path: '/exists.txt', content: 'data' });
+        const res = await r2Fetch('/access', { path: '/exists.txt' });
+        expect(((await res.json()) as any).ok).toBe(true);
+      });
+
+      it('should fail for non-existent path', async () => {
+        const res = await r2Fetch('/access', { path: '/nonexistent' });
+        expect(res.status).toBe(500);
+        expect(((await res.json()) as any).error).toContain('ENOENT');
+      });
+    });
+
+    describe('edge cases', () => {
+      it('should handle deeply nested paths', async () => {
+        await r2Fetch('/mkdir', { path: '/a/b/c/d/e', options: { recursive: true } });
+        await r2Fetch('/writeFile', { path: '/a/b/c/d/e/deep.txt', content: 'deep content' });
+
+        const res = await r2Fetch('/readFile', { path: '/a/b/c/d/e/deep.txt' });
+        expect(((await res.json()) as any).content).toBe('deep content');
+      });
+
+      it('should handle unicode content', async () => {
+        const unicodeContent = '\u{1F600}\u{1F389}\u{2764}\u{FE0F}';
+        await r2Fetch('/writeFile', { path: '/unicode.txt', content: unicodeContent });
+
+        const res = await r2Fetch('/readFile', { path: '/unicode.txt' });
+        expect(((await res.json()) as any).content).toBe(unicodeContent);
+      });
+    });
+  });
+
+  // ============================================
   // Edge Cases
   // ============================================
 

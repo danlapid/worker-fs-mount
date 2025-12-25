@@ -3,8 +3,10 @@
 
 import { withMounts, mount, isMounted, isInMountContext } from 'worker-fs-mount';
 import { DurableObjectFilesystem } from 'durable-object-fs';
+import { R2Filesystem } from 'r2-fs';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
+import type { Dirent } from 'node:fs';
 
 export { MemoryFilesystem, resetMemoryFilesystem } from './memory-filesystem.js';
 export { DurableObjectFilesystem };
@@ -22,9 +24,10 @@ async function safeCall<T>(fn: () => Promise<T>): Promise<{ result?: T; error?: 
 
 const MOUNT_PATH = '/mnt/test';
 const DO_MOUNT_PATH = '/mnt/do';
+const R2_MOUNT_PATH = '/mnt/r2';
 
 export default {
-  async fetch(request: Request, _env: unknown, ctx: ExecutionContext): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     // Wrap entire request in withMounts for request-scoped mount isolation
     return withMounts(async () => {
       const url = new URL(request.url);
@@ -32,7 +35,7 @@ export default {
 
       try {
         // Mount the filesystem for this request (except reset which clears state)
-        if (endpoint !== '/reset' && !endpoint.startsWith('/do/') && !endpoint.startsWith('/isolation/')) {
+        if (endpoint !== '/reset' && !endpoint.startsWith('/do/') && !endpoint.startsWith('/r2/') && !endpoint.startsWith('/isolation/')) {
           mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
         }
 
@@ -127,9 +130,10 @@ export default {
 
           if (doEndpoint === '/readdir') {
             const fullPath = `${DO_MOUNT_PATH}${body.path}`;
-            const { result: entries, error } = await safeCall(() =>
-              fs.readdir(fullPath, { withFileTypes: true, ...body.options })
-            );
+            const { result: entries, error } = await safeCall(async () => {
+              const dirents = await fs.readdir(fullPath, { withFileTypes: true, ...body.options });
+              return dirents as unknown as Dirent[];
+            });
             if (error) return Response.json({ ok: false, error }, { status: 500 });
             return Response.json({
               ok: true,
@@ -212,6 +216,163 @@ export default {
           }
 
           return Response.json({ error: 'Unknown DO endpoint' }, { status: 404 });
+        }
+
+        // ============================================
+        // R2 Filesystem Tests
+        // ============================================
+
+        if (endpoint.startsWith('/r2/')) {
+          const r2Endpoint = endpoint.slice(3); // Remove '/r2' prefix
+          const body = (await request.json()) as any;
+
+          // Get the R2 bucket from env and create R2Filesystem
+          const r2fs = new R2Filesystem(env.TEST_BUCKET);
+
+          // Mount the R2 filesystem
+          mount(R2_MOUNT_PATH, r2fs);
+
+          if (r2Endpoint === '/writeFile') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            let fsOptions: any = undefined;
+            if (body.options) {
+              if (body.options.append) {
+                fsOptions = { flag: 'a' };
+              } else if (body.options.exclusive) {
+                fsOptions = { flag: 'wx' };
+              } else {
+                fsOptions = body.options;
+              }
+            }
+            const { error } = await safeCall(async () => {
+              await fs.writeFile(fullPath, body.content, fsOptions);
+            });
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, bytesWritten: body.content.length });
+          }
+
+          if (r2Endpoint === '/readFile') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { result: content, error } = await safeCall(() => fs.readFile(fullPath, 'utf8'));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, content });
+          }
+
+          if (r2Endpoint === '/stat') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const statFn = body.options?.followSymlinks === false ? fs.lstat : fs.stat;
+            const { result: stat, error } = await safeCall(() => statFn(fullPath));
+            if (error) {
+              if (error.includes('ENOENT')) {
+                return Response.json({ ok: true, stat: null });
+              }
+              return Response.json({ ok: false, error }, { status: 500 });
+            }
+            if (!stat) return Response.json({ ok: true, stat: null });
+            return Response.json({
+              ok: true,
+              stat: {
+                type: stat.isDirectory() ? 'directory' : stat.isSymbolicLink() ? 'symlink' : 'file',
+                size: stat.size,
+              },
+            });
+          }
+
+          if (r2Endpoint === '/mkdir') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { result, error } = await safeCall(() => fs.mkdir(fullPath, body.options));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, result });
+          }
+
+          if (r2Endpoint === '/readdir') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { result: entries, error } = await safeCall(async () => {
+              const dirents = await fs.readdir(fullPath, { withFileTypes: true, ...body.options });
+              return dirents as unknown as Dirent[];
+            });
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({
+              ok: true,
+              entries: entries!.map((e) => ({
+                name: e.name,
+                type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
+              })),
+            });
+          }
+
+          if (r2Endpoint === '/rm') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.rm(fullPath, body.options));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/unlink') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.unlink(fullPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/rename') {
+            const fullOldPath = `${R2_MOUNT_PATH}${body.oldPath}`;
+            const fullNewPath = `${R2_MOUNT_PATH}${body.newPath}`;
+            const { error } = await safeCall(() => fs.rename(fullOldPath, fullNewPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/cp') {
+            const fullSrc = `${R2_MOUNT_PATH}${body.src}`;
+            const fullDest = `${R2_MOUNT_PATH}${body.dest}`;
+            const { error } = await safeCall(() => fs.cp(fullSrc, fullDest, body.options));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/truncate') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.truncate(fullPath, body.length));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/symlink') {
+            const fullLinkPath = `${R2_MOUNT_PATH}${body.linkPath}`;
+            const { error } = await safeCall(() => fs.symlink(body.targetPath, fullLinkPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/readlink') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { result: target, error } = await safeCall(() => fs.readlink(fullPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, target });
+          }
+
+          if (r2Endpoint === '/access') {
+            const fullPath = `${R2_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.access(fullPath, body.mode));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (r2Endpoint === '/reset') {
+            // Delete everything in the R2 bucket
+            const { error } = await safeCall(async () => {
+              const entries = await fs.readdir(R2_MOUNT_PATH, { withFileTypes: true });
+              for (const entry of entries) {
+                const fullPath = `${R2_MOUNT_PATH}/${entry.name}`;
+                await fs.rm(fullPath, { recursive: true, force: true });
+              }
+            });
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          return Response.json({ error: 'Unknown R2 endpoint' }, { status: 404 });
         }
 
         // ============================================
@@ -345,9 +506,10 @@ export default {
         if (endpoint === '/readdir') {
           const body = (await request.json()) as { path: string; options?: any };
           const fullPath = `${MOUNT_PATH}${body.path}`;
-          const { result: entries, error } = await safeCall(() =>
-            fs.readdir(fullPath, { withFileTypes: true, ...body.options })
-          );
+          const { result: entries, error } = await safeCall(async () => {
+            const dirents = await fs.readdir(fullPath, { withFileTypes: true, ...body.options });
+            return dirents as unknown as Dirent[];
+          });
           if (error) return Response.json({ ok: false, error }, { status: 500 });
           return Response.json({
             ok: true,

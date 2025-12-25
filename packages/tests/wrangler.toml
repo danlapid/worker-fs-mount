@@ -12,3 +12,8 @@ compatibility_flags = ["nodejs_compat"]
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["DurableObjectFilesystem"]
+
+# R2 bucket for R2Filesystem tests
+[[r2_buckets]]
+binding = "TEST_BUCKET"
+bucket_name = "test-bucket"
