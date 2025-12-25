@@ -1,10 +1,10 @@
 # @cloudflare/worker-fs-mount
 
-Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers. This package monkey-patches `node:fs/promises` to intercept filesystem calls and redirect them to your WorkerEntrypoint implementations via jsrpc.
+Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers. This package provides a drop-in replacement for `node:fs/promises` that intercepts filesystem calls and redirects them to your WorkerEntrypoint implementations via jsrpc.
 
 ## Features
 
-- **Zero config** - Just import and mount, existing `node:fs/promises` code works automatically
+- **Simple setup** - Just add an alias to `wrangler.toml` and your existing `node:fs/promises` code works
 - **Multiple mount sources** - Works with `ctx.exports`, service bindings, and Durable Objects
 - **Full fs coverage** - Supports 20+ filesystem operations (read, write, stat, readdir, mkdir, rm, rename, etc.)
 - **TypeScript-first** - Full type definitions with strict types
@@ -15,6 +15,17 @@ Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers. This packa
 ```bash
 npm install @cloudflare/worker-fs-mount
 ```
+
+## Setup
+
+Add the following alias to your `wrangler.toml`:
+
+```toml
+[alias]
+"node:fs/promises" = "@cloudflare/worker-fs-mount/fs"
+```
+
+This replaces `node:fs/promises` imports with our mount-aware implementation at build time.
 
 ## Quick Start
 
@@ -45,7 +56,7 @@ export default {
 
 ## How It Works
 
-When you import `@cloudflare/worker-fs-mount`, it automatically patches `node:fs/promises`. Every filesystem call checks if the path falls under a mounted location:
+With the wrangler alias configured, every `node:fs/promises` import is replaced with our implementation. Each filesystem call checks if the path falls under a mounted location:
 
 ```
 fs.readFile('/mnt/storage/file.txt')

@@ -1,0 +1,9 @@
+# Wrangler configuration for test worker
+name = "worker-fs-mount-tests"
+main = "index.ts"
+compatibility_date = "2025-12-17"
+compatibility_flags = ["nodejs_compat"]
+
+# Alias node:fs/promises to our mount-aware implementation
+[alias]
+"node:fs/promises" = "worker-fs-mount/fs"

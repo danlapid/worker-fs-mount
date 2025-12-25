@@ -24,3 +24,7 @@ coverage/
 # Package lock (use npm's)
 yarn.lock
 pnpm-lock.yaml
+
+
+# Wrangler files
+.wrangler/

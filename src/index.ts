@@ -3,7 +3,17 @@
  *
  * Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers.
  *
- * @example
+ * ## Setup
+ *
+ * Add the following alias to your wrangler.toml:
+ *
+ * ```toml
+ * [alias]
+ * "node:fs/promises" = "@cloudflare/worker-fs-mount/fs"
+ * ```
+ *
+ * ## Usage
+ *
  * ```typescript
  * import { mount } from '@cloudflare/worker-fs-mount';
  * import fs from 'node:fs/promises';
@@ -21,9 +31,6 @@
  *
  * @packageDocumentation
  */
-
-// Side effect: patch node:fs/promises on import
-import './patch.js';
 
 // Export mount functions
 export { mount, findMount, isMounted, getMounts, clearMounts } from './registry.js';

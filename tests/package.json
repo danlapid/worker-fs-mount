@@ -1,0 +1,8 @@
+{
+  "name": "worker-fs-mount-tests",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "worker-fs-mount": "workspace:*"
+  }
+}
