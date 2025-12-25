@@ -9,7 +9,8 @@
   "dependencies": {
     "worker-fs-mount": "workspace:*",
     "durable-object-fs": "workspace:*",
-    "r2-fs": "workspace:*"
+    "r2-fs": "workspace:*",
+    "memory-fs": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251225.0",

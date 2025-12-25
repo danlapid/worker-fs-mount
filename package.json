@@ -3,10 +3,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm -r --filter=worker-fs-mount --filter=durable-object-fs --filter=r2-fs run build",
-    "dev": "pnpm -r --filter=worker-fs-mount --filter=durable-object-fs --filter=r2-fs run dev",
+    "build": "pnpm -r --filter=worker-fs-mount --filter=durable-object-fs --filter=r2-fs --filter=memory-fs run build",
+    "dev": "pnpm -r --filter=worker-fs-mount --filter=durable-object-fs --filter=r2-fs --filter=memory-fs run dev",
     "clean": "pnpm -r run clean",
-    "typecheck": "pnpm -r --filter=worker-fs-mount --filter=durable-object-fs --filter=r2-fs run typecheck",
+    "typecheck": "pnpm -r --filter=worker-fs-mount --filter=durable-object-fs --filter=r2-fs --filter=memory-fs run typecheck",
     "test": "pnpm run build && pnpm -r --filter=worker-fs-mount-tests run test",
     "test:watch": "pnpm -r --filter=worker-fs-mount-tests run test:watch",
     "do-example": "pnpm run build && pnpm -r --filter=durable-object-backed-fs-example run dev",

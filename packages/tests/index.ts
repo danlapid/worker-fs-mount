@@ -4,12 +4,13 @@
 import { withMounts, mount, isMounted, isInMountContext } from 'worker-fs-mount';
 import { DurableObjectFilesystem } from 'durable-object-fs';
 import { R2Filesystem } from 'r2-fs';
+import { MemoryFilesystemEntrypoint } from 'memory-fs';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 
-export { MemoryFilesystem, resetMemoryFilesystem } from './memory-filesystem.js';
-export { DurableObjectFilesystem };
+// Re-export classes to make them available via ctx.exports
+export { DurableObjectFilesystem, MemoryFilesystemEntrypoint };
 
 
 // Helper to wrap async operations and catch errors properly
@@ -36,7 +37,7 @@ export default {
       try {
         // Mount the filesystem for this request (except reset which clears state)
         if (endpoint !== '/reset' && !endpoint.startsWith('/do/') && !endpoint.startsWith('/r2/') && !endpoint.startsWith('/isolation/')) {
-          mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
+          mount(MOUNT_PATH, ctx.exports.MemoryFilesystemEntrypoint);
         }
 
         if (endpoint === '/setup') {
@@ -45,8 +46,7 @@ export default {
         }
 
         if (endpoint === '/reset') {
-          const { resetMemoryFilesystem } = await import('./memory-filesystem.js');
-          resetMemoryFilesystem();
+          MemoryFilesystemEntrypoint.resetState();
           return Response.json({ ok: true });
         }
 
@@ -387,7 +387,7 @@ export default {
           if (body.action === 'mount') {
             // Try to mount - should succeed because we're in our own context
             try {
-              mount('/isolation/test', ctx.exports.MemoryFilesystem);
+              mount('/isolation/test', ctx.exports.MemoryFilesystemEntrypoint);
               return Response.json({
                 ok: true,
                 id: body.id,
@@ -417,7 +417,7 @@ export default {
           // Simulate a long-running operation to test concurrent mount isolation
           const body = (await request.json()) as { id: string; delay?: number };
 
-          mount('/concurrent', ctx.exports.MemoryFilesystem);
+          mount('/concurrent', ctx.exports.MemoryFilesystemEntrypoint);
 
           // Write a file with the request ID
           await fs.writeFile('/concurrent/id.txt', body.id);

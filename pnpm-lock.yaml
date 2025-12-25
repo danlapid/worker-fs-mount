@@ -61,6 +61,21 @@ importers:
         specifier: workspace:*
         version: link:../worker-fs-mount
 
+  packages/memory-fs:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20251225.0
+        version: 4.20251225.0
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      worker-fs-mount:
+        specifier: workspace:*
+        version: link:../worker-fs-mount
+
   packages/r2-fs:
     devDependencies:
       '@cloudflare/workers-types':
@@ -81,6 +96,9 @@ importers:
       durable-object-fs:
         specifier: workspace:*
         version: link:../durable-object-fs
+      memory-fs:
+        specifier: workspace:*
+        version: link:../memory-fs
       r2-fs:
         specifier: workspace:*
         version: link:../r2-fs
