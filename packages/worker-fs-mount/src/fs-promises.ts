@@ -8,10 +8,10 @@
  * "node:fs/promises" = "worker-fs-mount/fs"
  */
 
+import { Buffer } from 'node:buffer';
+import type { BigIntStats, Dirent, Stats } from 'node:fs';
 // Import the SYNC fs module and use .promises to avoid alias loop
 import * as nodeFs from 'node:fs';
-import type { Stats, Dirent, BigIntStats } from 'node:fs';
-import { Buffer } from 'node:buffer';
 import { findMount } from './registry.js';
 import type { DirEntry, Stat } from './types.js';
 

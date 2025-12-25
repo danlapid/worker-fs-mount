@@ -12,7 +12,7 @@ export function normalizePath(path: string): string {
   }
   // Ensure path starts with /
   if (!normalized.startsWith('/')) {
-    normalized = '/' + normalized;
+    normalized = `/${normalized}`;
   }
   return normalized;
 }
@@ -50,5 +50,5 @@ export function resolvePath(basePath: string, relativePath: string): string {
   if (relativePath.startsWith('/')) {
     return normalizePath(relativePath);
   }
-  return normalizePath(basePath + '/' + relativePath);
+  return normalizePath(`${basePath}/${relativePath}`);
 }

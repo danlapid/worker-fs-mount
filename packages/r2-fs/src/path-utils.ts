@@ -12,7 +12,7 @@ export function normalizePath(path: string): string {
   }
   // Ensure path starts with /
   if (!normalized.startsWith('/')) {
-    normalized = '/' + normalized;
+    normalized = `/${normalized}`;
   }
   return normalized;
 }
@@ -50,7 +50,7 @@ export function resolvePath(basePath: string, relativePath: string): string {
   if (relativePath.startsWith('/')) {
     return normalizePath(relativePath);
   }
-  return normalizePath(basePath + '/' + relativePath);
+  return normalizePath(`${basePath}/${relativePath}`);
 }
 
 /**
@@ -71,5 +71,5 @@ export function pathToKey(path: string): string {
  * @returns The filesystem path (e.g., /foo/bar)
  */
 export function keyToPath(key: string): string {
-  return '/' + key;
+  return `/${key}`;
 }

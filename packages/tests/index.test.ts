@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { type ChildProcess, spawn } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const TEST_PORT = 8787 + Math.floor(Math.random() * 1000);
@@ -615,8 +615,16 @@ describe('worker-fs-mount integration tests', () => {
 
     describe('multiple DO instances', () => {
       it('should isolate data between different DO IDs', async () => {
-        await workerFetch('/do/writeFile', { doId: 'do-1', path: '/file.txt', content: 'DO 1 data' });
-        await workerFetch('/do/writeFile', { doId: 'do-2', path: '/file.txt', content: 'DO 2 data' });
+        await workerFetch('/do/writeFile', {
+          doId: 'do-1',
+          path: '/file.txt',
+          content: 'DO 1 data',
+        });
+        await workerFetch('/do/writeFile', {
+          doId: 'do-2',
+          path: '/file.txt',
+          content: 'DO 2 data',
+        });
 
         const res1 = await workerFetch('/do/readFile', { doId: 'do-1', path: '/file.txt' });
         expect(((await res1.json()) as any).content).toBe('DO 1 data');

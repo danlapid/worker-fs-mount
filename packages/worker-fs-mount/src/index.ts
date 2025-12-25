@@ -39,12 +39,12 @@
 
 // Export public API
 export {
-  withMounts,
+  isInMountContext,
+  isMounted,
   mount,
   unmount,
-  isMounted,
-  isInMountContext,
+  withMounts,
 } from './registry.js';
 
 // Export types
-export type { WorkerFilesystem, Stat, DirEntry } from './types.js';
+export type { DirEntry, Stat, WorkerFilesystem } from './types.js';

@@ -1,13 +1,13 @@
 // Worker entry point for integration tests
 // Tests the actual library: withMounts() + mount() + aliased node:fs/promises
 
-import { withMounts, mount, isMounted, isInMountContext } from 'worker-fs-mount';
-import { DurableObjectFilesystem } from 'durable-object-fs';
-import { R2Filesystem } from 'r2-fs';
-import { MemoryFilesystemEntrypoint } from 'memory-fs';
+import type { Dirent } from 'node:fs';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
-import type { Dirent } from 'node:fs';
+import { DurableObjectFilesystem } from 'durable-object-fs';
+import { MemoryFilesystemEntrypoint } from 'memory-fs';
+import { R2Filesystem } from 'r2-fs';
+import { isInMountContext, isMounted, mount, withMounts } from 'worker-fs-mount';
 
 // Re-export classes to make them available via ctx.exports
 export { DurableObjectFilesystem, MemoryFilesystemEntrypoint };
@@ -33,7 +33,7 @@ async function handleFsEndpoint(
 ): Promise<Response | null> {
   if (fsEndpoint === '/writeFile') {
     const fullPath = `${mountPath}${body.path}`;
-    let fsOptions: any = undefined;
+    let fsOptions: any;
     if (body.options) {
       if (body.options.append) {
         fsOptions = { flag: 'a' };
@@ -93,7 +93,7 @@ async function handleFsEndpoint(
     if (error) return Response.json({ ok: false, error }, { status: 500 });
     return Response.json({
       ok: true,
-      entries: entries!.map((e) => ({
+      entries: entries?.map((e) => ({
         name: e.name,
         type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
       })),
@@ -262,7 +262,9 @@ export default {
         if (endpoint === '/readFileFullPath') {
           mount(MEM_MOUNT_PATH, ctx.exports.MemoryFilesystemEntrypoint);
           const body = (await request.json()) as { fullPath: string };
-          const { result: content, error } = await safeCall(() => fs.readFile(body.fullPath, 'utf8'));
+          const { result: content, error } = await safeCall(() =>
+            fs.readFile(body.fullPath, 'utf8')
+          );
           if (error) return Response.json({ ok: false, error }, { status: 500 });
           return Response.json({ ok: true, content });
         }

@@ -1,13 +1,13 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
-import { normalizePath, getParentPath, getBaseName, resolvePath } from './path-utils.js';
+import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 import { createFsError } from './errors.js';
-import { initializeSchema, type DbEntry } from './schema.js';
+import { getBaseName, getParentPath, normalizePath, resolvePath } from './path-utils.js';
+import { type DbEntry, initializeSchema } from './schema.js';
 
 // Re-export types for convenience
-export type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
+export type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 export { createFsError } from './errors.js';
-export { normalizePath, getParentPath, getBaseName } from './path-utils.js';
+export { getBaseName, getParentPath, normalizePath } from './path-utils.js';
 
 /**
  * A Durable Object that implements a filesystem using SQLite storage.
@@ -400,7 +400,7 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
 
     if (options?.recursive) {
       // Get all descendants
-      const prefix = normalized === '/' ? '/' : normalized + '/';
+      const prefix = normalized === '/' ? '/' : `${normalized}/`;
       const children = this.ctx.storage.sql
         .exec<Pick<DbEntry, 'path' | 'type'>>(
           "SELECT path, type FROM entries WHERE path LIKE ? || '%' AND path != ?",
@@ -493,9 +493,12 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
 
     if (entry.type === 'directory') {
       // Check for children
-      const prefix = normalized === '/' ? '/' : normalized + '/';
+      const prefix = normalized === '/' ? '/' : `${normalized}/`;
       const childrenResult = this.ctx.storage.sql
-        .exec<Pick<DbEntry, 'id'>>("SELECT id FROM entries WHERE path LIKE ? || '%' LIMIT 1", prefix)
+        .exec<Pick<DbEntry, 'id'>>(
+          "SELECT id FROM entries WHERE path LIKE ? || '%' LIMIT 1",
+          prefix
+        )
         .toArray();
 
       if (childrenResult.length > 0) {
@@ -644,8 +647,8 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
 
     // If directory, update all descendants
     if (entry.type === 'directory') {
-      const oldPrefix = normalizedOld + '/';
-      const newPrefix = normalizedNew + '/';
+      const oldPrefix = `${normalizedOld}/`;
+      const newPrefix = `${normalizedNew}/`;
 
       // Get all descendants
       const descendants = this.ctx.storage.sql
@@ -692,7 +695,7 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
 
       await this.mkdir(dest, { recursive: true });
 
-      const srcPrefix = normalizedSrc === '/' ? '/' : normalizedSrc + '/';
+      const srcPrefix = normalizedSrc === '/' ? '/' : `${normalizedSrc}/`;
       const descendants = this.ctx.storage.sql
         .exec<Pick<DbEntry, 'path' | 'type' | 'content' | 'symlink_target'>>(
           "SELECT path, type, content, symlink_target FROM entries WHERE path LIKE ? || '%'",
@@ -702,7 +705,7 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
 
       for (const entry of descendants) {
         const relativePath = entry.path.slice(srcPrefix.length);
-        const destPath = normalizedDest + '/' + relativePath;
+        const destPath = `${normalizedDest}/${relativePath}`;
 
         if (entry.type === 'file') {
           await this.writeFile(destPath, new Uint8Array(entry.content ?? new ArrayBuffer(0)));

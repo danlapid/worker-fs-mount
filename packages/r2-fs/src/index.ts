@@ -1,11 +1,11 @@
-import type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
-import { normalizePath, getParentPath, pathToKey, resolvePath } from './path-utils.js';
+import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 import { createFsError } from './errors.js';
+import { getParentPath, normalizePath, pathToKey, resolvePath } from './path-utils.js';
 
 // Re-export types for convenience
-export type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
+export type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 export { createFsError } from './errors.js';
-export { normalizePath, getParentPath, getBaseName, pathToKey, keyToPath } from './path-utils.js';
+export { getBaseName, getParentPath, keyToPath, normalizePath, pathToKey } from './path-utils.js';
 
 /**
  * Metadata stored in R2 customMetadata for each object.
@@ -128,7 +128,7 @@ export class R2Filesystem implements WorkerFilesystem {
     if (dirMarker) return true;
 
     // Check for any objects with this prefix (implicit directory)
-    const prefix = key + '/';
+    const prefix = `${key}/`;
     const listed = await this.bucket.list({ prefix, limit: 1 });
     return listed.objects.length > 0;
   }
@@ -184,7 +184,7 @@ export class R2Filesystem implements WorkerFilesystem {
     }
 
     // Check for implicit directory (objects with this prefix)
-    const prefix = key + '/';
+    const prefix = `${key}/`;
     const listed = await this.bucket.list({ prefix, limit: 1 });
     if (listed.objects.length > 0) {
       return {
@@ -276,9 +276,7 @@ export class R2Filesystem implements WorkerFilesystem {
 
     const now = new Date().toISOString();
     const existingObj = await this.bucket.head(key);
-    const created = existingObj
-      ? (this.parseMetadata(existingObj).created)
-      : now;
+    const created = existingObj ? this.parseMetadata(existingObj).created : now;
 
     await this.bucket.put(key, finalData, {
       customMetadata: {
@@ -359,9 +357,7 @@ export class R2Filesystem implements WorkerFilesystem {
     if (options?.start !== undefined || options?.end !== undefined) {
       const start = options?.start ?? 0;
       const length = options?.end !== undefined ? options.end - start : undefined;
-      r2Options.range = length !== undefined
-        ? { offset: start, length }
-        : { offset: start };
+      r2Options.range = length !== undefined ? { offset: start, length } : { offset: start };
     }
 
     const obj = await this.bucket.get(key, r2Options);
@@ -486,7 +482,7 @@ export class R2Filesystem implements WorkerFilesystem {
       throw createFsError('ENOTDIR', path);
     }
 
-    const prefix = normalized === '/' ? '' : pathToKey(normalized) + '/';
+    const prefix = normalized === '/' ? '' : `${pathToKey(normalized)}/`;
     const entries: DirEntry[] = [];
     const seenDirs = new Set<string>();
 
@@ -606,7 +602,7 @@ export class R2Filesystem implements WorkerFilesystem {
     const key = pathToKey(normalized);
 
     if (stat.type === 'directory') {
-      const prefix = key + '/';
+      const prefix = `${key}/`;
 
       // Check for children
       const listed = await this.bucket.list({ prefix, limit: 1 });
@@ -740,8 +736,8 @@ export class R2Filesystem implements WorkerFilesystem {
 
     if (srcStat.type === 'directory') {
       // For directories, we need to copy all contents
-      const oldPrefix = oldKey + '/';
-      const newPrefix = newKey + '/';
+      const oldPrefix = `${oldKey}/`;
+      const newPrefix = `${newKey}/`;
 
       // Copy directory marker
       const oldDirMarker = await this.bucket.get(oldKey + DIR_MARKER);
@@ -836,8 +832,8 @@ export class R2Filesystem implements WorkerFilesystem {
       // Create destination directory
       await this.mkdir(normalizedDest, { recursive: true });
 
-      const srcPrefix = srcKey + '/';
-      const destPrefix = destKey + '/';
+      const srcPrefix = `${srcKey}/`;
+      const destPrefix = `${destKey}/`;
 
       let cursor: string | undefined;
       do {

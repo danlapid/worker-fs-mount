@@ -1,8 +1,8 @@
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
+import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 
 // Re-export types for convenience
-export type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
+export type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
 
 /**
  * A file node in the in-memory filesystem.
@@ -108,7 +108,7 @@ export function normalizePath(path: string): string {
     normalized = normalized.slice(0, -1);
   }
   if (!normalized.startsWith('/')) {
-    normalized = '/' + normalized;
+    normalized = `/${normalized}`;
   }
   return normalized;
 }
@@ -190,7 +190,7 @@ export class MemoryFilesystem implements WorkerFilesystem {
     if (node?.type === 'symlink') {
       const target = node.target.startsWith('/')
         ? node.target
-        : normalizePath(getParentPath(path) + '/' + node.target);
+        : normalizePath(`${getParentPath(path)}/${node.target}`);
       return this.resolveSymlink(target, depth + 1);
     }
     return normalizePath(path);
@@ -411,7 +411,7 @@ export class MemoryFilesystem implements WorkerFilesystem {
       throw createFsError('ENOTDIR', path);
     }
 
-    const prefix = normalized === '/' ? '/' : normalized + '/';
+    const prefix = normalized === '/' ? '/' : `${normalized}/`;
     const entries: DirEntry[] = [];
     const seen = new Set<string>();
 
@@ -478,7 +478,7 @@ export class MemoryFilesystem implements WorkerFilesystem {
 
     if (node.type === 'directory') {
       // Check if directory is empty
-      const prefix = normalized === '/' ? '/' : normalized + '/';
+      const prefix = normalized === '/' ? '/' : `${normalized}/`;
       const hasChildren = Array.from(this.nodes.keys()).some(
         (p) => p !== normalized && p.startsWith(prefix)
       );
@@ -570,8 +570,8 @@ export class MemoryFilesystem implements WorkerFilesystem {
 
     // If directory, move all children
     if (node.type === 'directory') {
-      const oldPrefix = normalizedOld + '/';
-      const newPrefix = normalizedNew + '/';
+      const oldPrefix = `${normalizedOld}/`;
+      const newPrefix = `${normalizedNew}/`;
       const toMove: [string, FsNode][] = [];
 
       for (const [p, n] of this.nodes) {
@@ -605,11 +605,11 @@ export class MemoryFilesystem implements WorkerFilesystem {
 
       await this.mkdir(dest, { recursive: true });
 
-      const srcPrefix = normalizedSrc === '/' ? '/' : normalizedSrc + '/';
+      const srcPrefix = normalizedSrc === '/' ? '/' : `${normalizedSrc}/`;
       for (const [p, n] of this.nodes) {
         if (p.startsWith(srcPrefix)) {
           const relativePath = p.slice(srcPrefix.length);
-          const destPath = normalizedDest + '/' + relativePath;
+          const destPath = `${normalizedDest}/${relativePath}`;
           if (n.type === 'file') {
             await this.writeFile(destPath, n.content);
           } else if (n.type === 'directory') {

@@ -6,13 +6,9 @@
  */
 
 import { env } from 'cloudflare:workers';
+import fs from 'node:fs/promises';
 import { R2Filesystem } from 'r2-fs';
 import { mount } from 'worker-fs-mount';
-import fs from 'node:fs/promises';
-
-interface Env {
-  STORAGE: R2Bucket;
-}
 
 const MOUNT_PATH = '/storage';
 
@@ -47,10 +43,12 @@ async function handleApi(request: Request, url: URL): Promise<Response> {
     switch (url.pathname) {
       case '/api/list': {
         const entries = await fs.readdir(path, { withFileTypes: true });
-        const items = entries.map((e: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }) => ({
-          name: e.name,
-          type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
-        }));
+        const items = entries.map(
+          (e: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }) => ({
+            name: e.name,
+            type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
+          })
+        );
         return Response.json({ success: true, items });
       }
 

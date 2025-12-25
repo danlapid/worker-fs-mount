@@ -12,10 +12,10 @@
  * per-request using `this.ctx.exports`.
  */
 
-import { DurableObjectFilesystem } from 'durable-object-fs';
-import { mount, withMounts } from 'worker-fs-mount';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 import fs from 'node:fs/promises';
+import { DurableObjectFilesystem } from 'durable-object-fs';
+import { mount, withMounts } from 'worker-fs-mount';
 
 // Re-export the Durable Object class
 export { DurableObjectFilesystem };
@@ -57,10 +57,12 @@ export default class extends WorkerEntrypoint<Env> {
       switch (url.pathname) {
         case '/api/list': {
           const entries = await fs.readdir(path, { withFileTypes: true });
-          const items = entries.map((e: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }) => ({
-            name: e.name,
-            type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
-          }));
+          const items = entries.map(
+            (e: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }) => ({
+              name: e.name,
+              type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
+            })
+          );
           return Response.json({ success: true, items });
         }
 

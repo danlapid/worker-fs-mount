@@ -56,7 +56,7 @@ function validateMountPath(path: string): void {
 
   // Check reserved paths
   for (const reserved of RESERVED_PATHS) {
-    if (path === reserved || path.startsWith(reserved + '/')) {
+    if (path === reserved || path.startsWith(`${reserved}/`)) {
       throw new Error(`Cannot mount over reserved path: ${reserved}`);
     }
   }
@@ -129,15 +129,11 @@ export function mount(path: string, stub: WorkerFilesystem): MountHandle {
 
   // Check for overlapping mounts
   for (const existing of mounts.keys()) {
-    if (normalized.startsWith(existing + '/')) {
-      throw new Error(
-        `Cannot mount at ${normalized}: parent path ${existing} is already mounted`
-      );
+    if (normalized.startsWith(`${existing}/`)) {
+      throw new Error(`Cannot mount at ${normalized}: parent path ${existing} is already mounted`);
     }
-    if (existing.startsWith(normalized + '/')) {
-      throw new Error(
-        `Cannot mount at ${normalized}: child path ${existing} is already mounted`
-      );
+    if (existing.startsWith(`${normalized}/`)) {
+      throw new Error(`Cannot mount at ${normalized}: child path ${existing} is already mounted`);
     }
   }
 
@@ -186,7 +182,7 @@ export function findMount(path: string): MountMatch | null {
     if (normalized === mountPath) {
       return { mount: mountData, relativePath: '/' };
     }
-    if (normalized.startsWith(mountPath + '/')) {
+    if (normalized.startsWith(`${mountPath}/`)) {
       return {
         mount: mountData,
         relativePath: normalized.slice(mountPath.length),

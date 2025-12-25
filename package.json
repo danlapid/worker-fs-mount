@@ -10,6 +10,15 @@
     "test": "pnpm run build && pnpm -r --filter=worker-fs-mount-tests run test",
     "test:watch": "pnpm -r --filter=worker-fs-mount-tests run test:watch",
     "do-example": "pnpm run build && pnpm -r --filter=durable-object-backed-fs-example run dev",
-    "r2-example": "pnpm run build && pnpm -r --filter=r2-backed-fs-example run dev"
+    "r2-example": "pnpm run build && pnpm -r --filter=r2-backed-fs-example run dev",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "format": "biome format .",
+    "format:fix": "biome format --write .",
+    "check": "biome check .",
+    "check:fix": "biome check --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.3.10"
   }
 }
