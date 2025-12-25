@@ -1,10 +1,24 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Mount, MountHandle, MountMatch, WorkerFilesystem } from './types.js';
 
 /**
- * Global mount registry.
- * Maps normalized mount paths to their mount configurations.
+ * AsyncLocalStorage for request-scoped mounts.
+ * Each request can have its own isolated mount registry.
  */
-const mounts = new Map<string, Mount>();
+const mountStorage = new AsyncLocalStorage<Map<string, Mount>>();
+
+/**
+ * Global mount registry (fallback for backwards compatibility).
+ * Used when mount() is called outside of withMounts().
+ */
+const globalMounts = new Map<string, Mount>();
+
+/**
+ * Get the current mount registry (request-scoped or global fallback).
+ */
+function getMountRegistry(): Map<string, Mount> {
+  return mountStorage.getStore() ?? globalMounts;
+}
 
 /**
  * Reserved paths that cannot be mounted over.
@@ -49,7 +63,41 @@ function validateMountPath(path: string): void {
 }
 
 /**
+ * Run a function with an isolated mount context.
+ * Mounts created within the callback are scoped to that request
+ * and automatically cleaned up when the callback completes.
+ *
+ * @param fn - The function to run with isolated mounts
+ * @returns The result of the function
+ *
+ * @example
+ * ```typescript
+ * import { withMounts, mount } from 'worker-fs-mount';
+ * import fs from 'node:fs/promises';
+ *
+ * export default {
+ *   async fetch(request: Request, env: Env) {
+ *     return withMounts(async () => {
+ *       const id = env.FILESYSTEM.idFromName('user-123');
+ *       mount('/data', env.FILESYSTEM.get(id));
+ *
+ *       const content = await fs.readFile('/data/file.txt', 'utf8');
+ *       return new Response(content);
+ *     });
+ *   }
+ * };
+ * ```
+ */
+export function withMounts<T>(fn: () => T): T {
+  const requestMounts = new Map<string, Mount>();
+  return mountStorage.run(requestMounts, fn);
+}
+
+/**
  * Mount a WorkerFilesystem at the specified path.
+ *
+ * When called within withMounts(), the mount is scoped to that context.
+ * When called outside withMounts(), uses a global registry (for backwards compatibility).
  *
  * @param path - The mount point (must be absolute, starting with /)
  * @param stub - The WorkerFilesystem implementation to mount
@@ -57,14 +105,20 @@ function validateMountPath(path: string): void {
  *
  * @example
  * ```typescript
- * import { mount } from 'worker-fs-mount';
+ * import { withMounts, mount } from 'worker-fs-mount';
  *
+ * // Recommended: use withMounts for request isolation
+ * withMounts(() => {
+ *   const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
+ *   // ... use fs operations ...
+ * });
+ *
+ * // Legacy: works but not isolated between concurrent requests
  * const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
- * // ... use fs operations ...
- * handle.unmount();
  * ```
  */
 export function mount(path: string, stub: WorkerFilesystem): MountHandle {
+  const mounts = getMountRegistry();
   const normalized = normalizePath(path);
 
   validateMountPath(normalized);
@@ -113,6 +167,7 @@ export function mount(path: string, stub: WorkerFilesystem): MountHandle {
  * ```
  */
 export function unmount(path: string): boolean {
+  const mounts = getMountRegistry();
   const normalized = normalizePath(path);
   return mounts.delete(normalized);
 }
@@ -124,6 +179,7 @@ export function unmount(path: string): boolean {
  * @returns The mount and relative path within that mount, or null if not mounted
  */
 export function findMount(path: string): MountMatch | null {
+  const mounts = getMountRegistry();
   const normalized = normalizePath(path);
 
   for (const [mountPath, mountData] of mounts) {
@@ -152,17 +208,29 @@ export function isMounted(path: string): boolean {
 }
 
 /**
- * Get all active mounts.
+ * Get all active mounts in the current context.
  *
  * @returns Array of mount paths
  */
 export function getMounts(): string[] {
+  const mounts = getMountRegistry();
   return Array.from(mounts.keys());
 }
 
 /**
- * Clear all mounts. Primarily for testing.
+ * Clear all mounts in the current context.
+ * Primarily for testing.
  */
 export function clearMounts(): void {
+  const mounts = getMountRegistry();
   mounts.clear();
+}
+
+/**
+ * Check if currently running within a withMounts() context.
+ *
+ * @returns True if in a request-scoped context, false if using global registry
+ */
+export function isInMountContext(): boolean {
+  return mountStorage.getStore() !== undefined;
 }

@@ -15,25 +15,36 @@
  * ## Usage
  *
  * ```typescript
- * import { mount } from 'worker-fs-mount';
+ * import { withMounts, mount } from 'worker-fs-mount';
  * import fs from 'node:fs/promises';
  *
- * // Mount a WorkerEntrypoint
- * mount('/mnt/storage', env.STORAGE_SERVICE);
+ * export default {
+ *   async fetch(request: Request, env: Env) {
+ *     return withMounts(async () => {
+ *       // Mount a WorkerEntrypoint (scoped to this request)
+ *       mount('/mnt/storage', env.STORAGE_SERVICE);
  *
- * // Use standard fs operations - they're automatically intercepted
- * await fs.writeFile('/mnt/storage/file.txt', 'Hello, World!');
- * const content = await fs.readFile('/mnt/storage/file.txt', 'utf8');
+ *       // Use standard fs operations - they're automatically intercepted
+ *       await fs.writeFile('/mnt/storage/file.txt', 'Hello, World!');
+ *       const content = await fs.readFile('/mnt/storage/file.txt', 'utf8');
  *
- * // Unmount when done
- * unmount('/mnt/storage');
+ *       return new Response(content);
+ *     }); // Mounts automatically cleaned up
+ *   }
+ * };
  * ```
  *
  * @packageDocumentation
  */
 
 // Export public API
-export { mount, unmount, isMounted } from './registry.js';
+export {
+  withMounts,
+  mount,
+  unmount,
+  isMounted,
+  isInMountContext,
+} from './registry.js';
 
 // Export types
 export type { WorkerFilesystem, Stat, DirEntry } from './types.js';

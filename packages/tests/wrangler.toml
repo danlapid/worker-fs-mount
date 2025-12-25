@@ -7,3 +7,8 @@ compatibility_flags = ["nodejs_compat"]
 # Alias node:fs/promises to our mount-aware implementation
 [alias]
 "node:fs/promises" = "worker-fs-mount/fs"
+
+# SQLite migration for the Durable Object (accessed via ctx.exports)
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["DurableObjectFilesystem"]

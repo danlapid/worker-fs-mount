@@ -8,8 +8,26 @@ importers:
 
   .: {}
 
+  packages/durable-object-fs:
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: ^4.20251225.0
+        version: 4.20251225.0
+      '@types/node':
+        specifier: ^25.0.3
+        version: 25.0.3
+      typescript:
+        specifier: ^5.7.2
+        version: 5.9.3
+      worker-fs-mount:
+        specifier: workspace:*
+        version: link:../worker-fs-mount
+
   packages/tests:
     dependencies:
+      durable-object-fs:
+        specifier: workspace:*
+        version: link:../durable-object-fs
       worker-fs-mount:
         specifier: workspace:*
         version: link:../worker-fs-mount

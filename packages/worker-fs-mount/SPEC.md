@@ -126,9 +126,9 @@ mount('/mnt/local', ctx.exports.MyFilesystem);
 // Service binding
 mount('/mnt/remote', env.STORAGE_SERVICE);
 
-// Durable Object stub
-const id = env.STORAGE_DO.idFromName('my-storage');
-const stub = env.STORAGE_DO.get(id);
+// Durable Object stub via ctx.exports (recommended - run `wrangler types` for full typing)
+const id = ctx.exports.StorageDO.idFromName('my-storage');
+const stub = ctx.exports.StorageDO.get(id);
 mount('/mnt/durable', stub);
 ```
 

@@ -7,7 +7,8 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "worker-fs-mount": "workspace:*"
+    "worker-fs-mount": "workspace:*",
+    "durable-object-fs": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251225.0",

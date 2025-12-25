@@ -1,11 +1,14 @@
 // Worker entry point for integration tests
-// Tests the actual library: mount() + aliased node:fs/promises
+// Tests the actual library: withMounts() + mount() + aliased node:fs/promises
 
-import { mount, unmount, isMounted } from 'worker-fs-mount';
+import { withMounts, mount, isMounted, isInMountContext } from 'worker-fs-mount';
+import { DurableObjectFilesystem } from 'durable-object-fs';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
 
 export { MemoryFilesystem, resetMemoryFilesystem } from './memory-filesystem.js';
+export { DurableObjectFilesystem };
+
 
 // Helper to wrap async operations and catch errors properly
 async function safeCall<T>(fn: () => Promise<T>): Promise<{ result?: T; error?: string }> {
@@ -18,200 +21,422 @@ async function safeCall<T>(fn: () => Promise<T>): Promise<{ result?: T; error?: 
 }
 
 const MOUNT_PATH = '/mnt/test';
+const DO_MOUNT_PATH = '/mnt/do';
 
 export default {
-  async fetch(request: Request, _env: Env, ctx: ExecutionContext): Promise<Response> {
-    const url = new URL(request.url);
-    const endpoint = url.pathname;
+  async fetch(request: Request, _env: unknown, ctx: ExecutionContext): Promise<Response> {
+    // Wrap entire request in withMounts for request-scoped mount isolation
+    return withMounts(async () => {
+      const url = new URL(request.url);
+      const endpoint = url.pathname;
 
-    try {
-      // Ensure mount exists for operations (except setup/reset which manage the mount)
-      if (endpoint !== '/setup' && endpoint !== '/reset' && !isMounted(MOUNT_PATH)) {
-        mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
-      }
-
-      if (endpoint === '/setup') {
-        // Unmount if already mounted, then remount fresh
-        if (isMounted(MOUNT_PATH)) {
-          unmount(MOUNT_PATH);
+      try {
+        // Mount the filesystem for this request (except reset which clears state)
+        if (endpoint !== '/reset' && !endpoint.startsWith('/do/') && !endpoint.startsWith('/isolation/')) {
+          mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
         }
-        mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
-        return Response.json({ ok: true, mounted: MOUNT_PATH });
-      }
 
-      if (endpoint === '/reset') {
-        const { resetMemoryFilesystem } = await import('./memory-filesystem.js');
-        resetMemoryFilesystem();
-        if (isMounted(MOUNT_PATH)) {
-          unmount(MOUNT_PATH);
+        if (endpoint === '/setup') {
+          // Mount already done above, just return success
+          return Response.json({ ok: true, mounted: MOUNT_PATH });
         }
-        return Response.json({ ok: true });
-      }
 
-      if (endpoint === '/isMounted') {
-        const body = (await request.json()) as { path: string };
-        return Response.json({ ok: true, mounted: isMounted(body.path) });
-      }
+        if (endpoint === '/reset') {
+          const { resetMemoryFilesystem } = await import('./memory-filesystem.js');
+          resetMemoryFilesystem();
+          return Response.json({ ok: true });
+        }
 
-      // ============================================
-      // All operations use the ALIASED node:fs/promises
-      // fs.X() -> fs-promises.ts -> findMount() -> stub.X()
-      // ============================================
+        if (endpoint === '/isMounted') {
+          const body = (await request.json()) as { path: string };
+          return Response.json({ ok: true, mounted: isMounted(body.path) });
+        }
 
-      if (endpoint === '/writeFile') {
-        const body = (await request.json()) as { path: string; content: string; options?: any };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        // Convert our simple options to node:fs flag format
-        let fsOptions: any = undefined;
-        if (body.options) {
-          if (body.options.append) {
-            fsOptions = { flag: 'a' };
-          } else if (body.options.exclusive) {
-            fsOptions = { flag: 'wx' };
-          } else {
-            fsOptions = body.options;
+        if (endpoint === '/isInMountContext') {
+          return Response.json({ ok: true, inContext: isInMountContext() });
+        }
+
+        // ============================================
+        // DurableObject Filesystem Tests
+        // ============================================
+
+        if (endpoint.startsWith('/do/')) {
+          const doEndpoint = endpoint.slice(3); // Remove '/do' prefix
+          const body = (await request.json()) as any;
+
+          // Get or create DO instance using ctx.exports
+          const doId = body.doId ?? 'test-do';
+          const id = ctx.exports.DurableObjectFilesystem.idFromName(doId);
+          const stub = ctx.exports.DurableObjectFilesystem.get(id);
+
+          // Mount the DO filesystem
+          mount(DO_MOUNT_PATH, stub);
+
+          if (doEndpoint === '/writeFile') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            let fsOptions: any = undefined;
+            if (body.options) {
+              if (body.options.append) {
+                fsOptions = { flag: 'a' };
+              } else if (body.options.exclusive) {
+                fsOptions = { flag: 'wx' };
+              } else {
+                fsOptions = body.options;
+              }
+            }
+            const { error } = await safeCall(async () => {
+              await fs.writeFile(fullPath, body.content, fsOptions);
+            });
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, bytesWritten: body.content.length });
+          }
+
+          if (doEndpoint === '/readFile') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { result: content, error } = await safeCall(() => fs.readFile(fullPath, 'utf8'));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, content });
+          }
+
+          if (doEndpoint === '/stat') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const statFn = body.options?.followSymlinks === false ? fs.lstat : fs.stat;
+            const { result: stat, error } = await safeCall(() => statFn(fullPath));
+            if (error) {
+              if (error.includes('ENOENT')) {
+                return Response.json({ ok: true, stat: null });
+              }
+              return Response.json({ ok: false, error }, { status: 500 });
+            }
+            if (!stat) return Response.json({ ok: true, stat: null });
+            return Response.json({
+              ok: true,
+              stat: {
+                type: stat.isDirectory() ? 'directory' : stat.isSymbolicLink() ? 'symlink' : 'file',
+                size: stat.size,
+              },
+            });
+          }
+
+          if (doEndpoint === '/mkdir') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { result, error } = await safeCall(() => fs.mkdir(fullPath, body.options));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, result });
+          }
+
+          if (doEndpoint === '/readdir') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { result: entries, error } = await safeCall(() =>
+              fs.readdir(fullPath, { withFileTypes: true, ...body.options })
+            );
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({
+              ok: true,
+              entries: entries!.map((e) => ({
+                name: e.name,
+                type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
+              })),
+            });
+          }
+
+          if (doEndpoint === '/rm') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.rm(fullPath, body.options));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/unlink') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.unlink(fullPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/rename') {
+            const fullOldPath = `${DO_MOUNT_PATH}${body.oldPath}`;
+            const fullNewPath = `${DO_MOUNT_PATH}${body.newPath}`;
+            const { error } = await safeCall(() => fs.rename(fullOldPath, fullNewPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/cp') {
+            const fullSrc = `${DO_MOUNT_PATH}${body.src}`;
+            const fullDest = `${DO_MOUNT_PATH}${body.dest}`;
+            const { error } = await safeCall(() => fs.cp(fullSrc, fullDest, body.options));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/truncate') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.truncate(fullPath, body.length));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/symlink') {
+            const fullLinkPath = `${DO_MOUNT_PATH}${body.linkPath}`;
+            const { error } = await safeCall(() => fs.symlink(body.targetPath, fullLinkPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/readlink') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { result: target, error } = await safeCall(() => fs.readlink(fullPath));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true, target });
+          }
+
+          if (doEndpoint === '/access') {
+            const fullPath = `${DO_MOUNT_PATH}${body.path}`;
+            const { error } = await safeCall(() => fs.access(fullPath, body.mode));
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          if (doEndpoint === '/reset') {
+            // Delete everything in the DO filesystem
+            const { error } = await safeCall(async () => {
+              const entries = await fs.readdir(DO_MOUNT_PATH, { withFileTypes: true });
+              for (const entry of entries) {
+                const fullPath = `${DO_MOUNT_PATH}/${entry.name}`;
+                await fs.rm(fullPath, { recursive: true, force: true });
+              }
+            });
+            if (error) return Response.json({ ok: false, error }, { status: 500 });
+            return Response.json({ ok: true });
+          }
+
+          return Response.json({ error: 'Unknown DO endpoint' }, { status: 404 });
+        }
+
+        // ============================================
+        // Mount Isolation Tests
+        // ============================================
+
+        if (endpoint === '/isolation/test') {
+          // This endpoint tests that mounts are isolated per-request
+          // Each request should be able to mount to /test without conflict
+          const body = (await request.json()) as { id: string; action: 'mount' | 'check' };
+
+          if (body.action === 'mount') {
+            // Try to mount - should succeed because we're in our own context
+            try {
+              mount('/isolation/test', ctx.exports.MemoryFilesystem);
+              return Response.json({
+                ok: true,
+                id: body.id,
+                mounted: true,
+                inContext: isInMountContext()
+              });
+            } catch (error) {
+              return Response.json({
+                ok: false,
+                id: body.id,
+                error: (error as Error).message
+              });
+            }
+          }
+
+          if (body.action === 'check') {
+            return Response.json({
+              ok: true,
+              id: body.id,
+              isMounted: isMounted('/isolation/test'),
+              inContext: isInMountContext()
+            });
           }
         }
-        const { error } = await safeCall(async () => {
-          await fs.writeFile(fullPath, body.content, fsOptions);
-        });
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, bytesWritten: body.content.length });
-      }
 
-      if (endpoint === '/readFile') {
-        const body = (await request.json()) as { path: string };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { result: content, error } = await safeCall(() => fs.readFile(fullPath, 'utf8'));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, content });
-      }
+        if (endpoint === '/isolation/concurrent') {
+          // Simulate a long-running operation to test concurrent mount isolation
+          const body = (await request.json()) as { id: string; delay?: number };
 
-      if (endpoint === '/stat') {
-        const body = (await request.json()) as { path: string; options?: any };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        // Use lstat if followSymlinks is false
-        const statFn = body.options?.followSymlinks === false ? fs.lstat : fs.stat;
-        const { result: stat, error } = await safeCall(() => statFn(fullPath));
-        if (error) {
-          // Return null for ENOENT errors
-          if (error.includes('ENOENT')) {
-            return Response.json({ ok: true, stat: null });
+          mount('/concurrent', ctx.exports.MemoryFilesystem);
+
+          // Write a file with the request ID
+          await fs.writeFile('/concurrent/id.txt', body.id);
+
+          // Wait for the specified delay
+          if (body.delay) {
+            await new Promise(r => setTimeout(r, body.delay));
           }
-          return Response.json({ ok: false, error }, { status: 500 });
+
+          // Read back the file - should still have our ID
+          const content = await fs.readFile('/concurrent/id.txt', 'utf8');
+
+          return Response.json({
+            ok: true,
+            id: body.id,
+            readId: content,
+            match: content === body.id
+          });
         }
-        if (!stat) return Response.json({ ok: true, stat: null });
-        return Response.json({
-          ok: true,
-          stat: {
-            type: stat.isDirectory() ? 'directory' : stat.isSymbolicLink() ? 'symlink' : 'file',
-            size: stat.size,
-          },
-        });
-      }
 
-      if (endpoint === '/mkdir') {
-        const body = (await request.json()) as { path: string; options?: any };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { result, error } = await safeCall(() => fs.mkdir(fullPath, body.options));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, result });
-      }
+        // ============================================
+        // All operations use the ALIASED node:fs/promises
+        // fs.X() -> fs-promises.ts -> findMount() -> stub.X()
+        // ============================================
 
-      if (endpoint === '/readdir') {
-        const body = (await request.json()) as { path: string; options?: any };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { result: entries, error } = await safeCall(() =>
-          fs.readdir(fullPath, { withFileTypes: true, ...body.options })
-        );
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({
-          ok: true,
-          entries: entries!.map((e) => ({
-            name: e.name,
-            type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
-          })),
-        });
-      }
+        if (endpoint === '/writeFile') {
+          const body = (await request.json()) as { path: string; content: string; options?: any };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          // Convert our simple options to node:fs flag format
+          let fsOptions: any = undefined;
+          if (body.options) {
+            if (body.options.append) {
+              fsOptions = { flag: 'a' };
+            } else if (body.options.exclusive) {
+              fsOptions = { flag: 'wx' };
+            } else {
+              fsOptions = body.options;
+            }
+          }
+          const { error } = await safeCall(async () => {
+            await fs.writeFile(fullPath, body.content, fsOptions);
+          });
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true, bytesWritten: body.content.length });
+        }
 
-      if (endpoint === '/rm') {
-        const body = (await request.json()) as { path: string; options?: any };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { error } = await safeCall(() => fs.rm(fullPath, body.options));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/readFile') {
+          const body = (await request.json()) as { path: string };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { result: content, error } = await safeCall(() => fs.readFile(fullPath, 'utf8'));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true, content });
+        }
 
-      if (endpoint === '/unlink') {
-        const body = (await request.json()) as { path: string };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { error } = await safeCall(() => fs.unlink(fullPath));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/stat') {
+          const body = (await request.json()) as { path: string; options?: any };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          // Use lstat if followSymlinks is false
+          const statFn = body.options?.followSymlinks === false ? fs.lstat : fs.stat;
+          const { result: stat, error } = await safeCall(() => statFn(fullPath));
+          if (error) {
+            // Return null for ENOENT errors
+            if (error.includes('ENOENT')) {
+              return Response.json({ ok: true, stat: null });
+            }
+            return Response.json({ ok: false, error }, { status: 500 });
+          }
+          if (!stat) return Response.json({ ok: true, stat: null });
+          return Response.json({
+            ok: true,
+            stat: {
+              type: stat.isDirectory() ? 'directory' : stat.isSymbolicLink() ? 'symlink' : 'file',
+              size: stat.size,
+            },
+          });
+        }
 
-      if (endpoint === '/rename') {
-        const body = (await request.json()) as { oldPath: string; newPath: string };
-        const fullOldPath = `${MOUNT_PATH}${body.oldPath}`;
-        const fullNewPath = `${MOUNT_PATH}${body.newPath}`;
-        const { error } = await safeCall(() => fs.rename(fullOldPath, fullNewPath));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/mkdir') {
+          const body = (await request.json()) as { path: string; options?: any };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { result, error } = await safeCall(() => fs.mkdir(fullPath, body.options));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true, result });
+        }
 
-      if (endpoint === '/cp') {
-        const body = (await request.json()) as { src: string; dest: string; options?: any };
-        const fullSrc = `${MOUNT_PATH}${body.src}`;
-        const fullDest = `${MOUNT_PATH}${body.dest}`;
-        const { error } = await safeCall(() => fs.cp(fullSrc, fullDest, body.options));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/readdir') {
+          const body = (await request.json()) as { path: string; options?: any };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { result: entries, error } = await safeCall(() =>
+            fs.readdir(fullPath, { withFileTypes: true, ...body.options })
+          );
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({
+            ok: true,
+            entries: entries!.map((e) => ({
+              name: e.name,
+              type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
+            })),
+          });
+        }
 
-      if (endpoint === '/truncate') {
-        const body = (await request.json()) as { path: string; length?: number };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { error } = await safeCall(() => fs.truncate(fullPath, body.length));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/rm') {
+          const body = (await request.json()) as { path: string; options?: any };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { error } = await safeCall(() => fs.rm(fullPath, body.options));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
 
-      if (endpoint === '/symlink') {
-        const body = (await request.json()) as { linkPath: string; targetPath: string };
-        const fullLinkPath = `${MOUNT_PATH}${body.linkPath}`;
-        const { error } = await safeCall(() => fs.symlink(body.targetPath, fullLinkPath));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/unlink') {
+          const body = (await request.json()) as { path: string };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { error } = await safeCall(() => fs.unlink(fullPath));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
 
-      if (endpoint === '/readlink') {
-        const body = (await request.json()) as { path: string };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { result: target, error } = await safeCall(() => fs.readlink(fullPath));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, target });
-      }
+        if (endpoint === '/rename') {
+          const body = (await request.json()) as { oldPath: string; newPath: string };
+          const fullOldPath = `${MOUNT_PATH}${body.oldPath}`;
+          const fullNewPath = `${MOUNT_PATH}${body.newPath}`;
+          const { error } = await safeCall(() => fs.rename(fullOldPath, fullNewPath));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
 
-      if (endpoint === '/access') {
-        const body = (await request.json()) as { path: string; mode?: number };
-        const fullPath = `${MOUNT_PATH}${body.path}`;
-        const { error } = await safeCall(() => fs.access(fullPath, body.mode));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true });
-      }
+        if (endpoint === '/cp') {
+          const body = (await request.json()) as { src: string; dest: string; options?: any };
+          const fullSrc = `${MOUNT_PATH}${body.src}`;
+          const fullDest = `${MOUNT_PATH}${body.dest}`;
+          const { error } = await safeCall(() => fs.cp(fullSrc, fullDest, body.options));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
 
-      if (endpoint === '/readFileFullPath') {
-        const body = (await request.json()) as { fullPath: string };
-        // Uses the aliased fs.readFile with a full path (tests that mount routing works)
-        const { result: content, error } = await safeCall(() => fs.readFile(body.fullPath, 'utf8'));
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, content });
-      }
+        if (endpoint === '/truncate') {
+          const body = (await request.json()) as { path: string; length?: number };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { error } = await safeCall(() => fs.truncate(fullPath, body.length));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
 
-      return Response.json({ error: 'Unknown endpoint' }, { status: 404 });
-    } catch (error) {
-      const err = error as Error;
-      return Response.json({ ok: false, error: err.message }, { status: 500 });
-    }
+        if (endpoint === '/symlink') {
+          const body = (await request.json()) as { linkPath: string; targetPath: string };
+          const fullLinkPath = `${MOUNT_PATH}${body.linkPath}`;
+          const { error } = await safeCall(() => fs.symlink(body.targetPath, fullLinkPath));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
+
+        if (endpoint === '/readlink') {
+          const body = (await request.json()) as { path: string };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { result: target, error } = await safeCall(() => fs.readlink(fullPath));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true, target });
+        }
+
+        if (endpoint === '/access') {
+          const body = (await request.json()) as { path: string; mode?: number };
+          const fullPath = `${MOUNT_PATH}${body.path}`;
+          const { error } = await safeCall(() => fs.access(fullPath, body.mode));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true });
+        }
+
+        if (endpoint === '/readFileFullPath') {
+          const body = (await request.json()) as { fullPath: string };
+          // Uses the aliased fs.readFile with a full path (tests that mount routing works)
+          const { result: content, error } = await safeCall(() => fs.readFile(body.fullPath, 'utf8'));
+          if (error) return Response.json({ ok: false, error }, { status: 500 });
+          return Response.json({ ok: true, content });
+        }
+
+        return Response.json({ error: 'Unknown endpoint' }, { status: 404 });
+      } catch (error) {
+        const err = error as Error;
+        return Response.json({ ok: false, error: err.message }, { status: 500 });
+      }
+    });
   },
 };

@@ -106,10 +106,21 @@ export default class extends WorkerEntrypoint {
 
 ### Durable Objects
 
+Access via `ctx.exports` (recommended) - run `wrangler types` to generate types:
+
 ```typescript
-const id = env.STORAGE_DO.idFromName('user-123');
-const stub = env.STORAGE_DO.get(id);
-mount('/mnt/user', stub);
+export class StorageDO extends DurableObject implements WorkerFilesystem {
+  // ... implement filesystem methods
+}
+
+export default class extends WorkerEntrypoint<Env> {
+  async fetch() {
+    // ctx.exports provides typed access to your exported Durable Objects
+    const id = this.ctx.exports.StorageDO.idFromName('user-123');
+    const stub = this.ctx.exports.StorageDO.get(id);
+    mount('/mnt/user', stub);
+  }
+}
 ```
 
 ## Implementing a WorkerFilesystem
