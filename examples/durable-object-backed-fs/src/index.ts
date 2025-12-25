@@ -4,6 +4,12 @@
  * This example demonstrates using worker-fs-mount and durable-object-fs
  * to store files persistently in a Durable Object using standard Node.js
  * fs/promises APIs.
+ *
+ * NOTE: Unlike the R2 example, we cannot use `import { exports } from 'cloudflare:workers'`
+ * at module scope to mount the DO filesystem globally. The `exports` object is not yet
+ * available during module initialization for Durable Object namespaces. This is a runtime
+ * limitation that should be fixed in the future. For now, we use `withMounts` to mount
+ * per-request using `this.ctx.exports`.
  */
 
 import { DurableObjectFilesystem } from 'durable-object-fs';
@@ -20,6 +26,8 @@ export default class extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
     return withMounts(async () => {
       // Mount the Durable Object filesystem
+      // TODO: Once the runtime supports `exports` at module scope for DO namespaces,
+      // this can be simplified to a global mount like the R2 example.
       const id = this.ctx.exports.DurableObjectFilesystem.idFromName('demo');
       const stub = this.ctx.exports.DurableObjectFilesystem.get(id);
       mount(MOUNT_PATH, stub);

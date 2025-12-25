@@ -5,8 +5,9 @@
  * persistently in an R2 bucket using standard Node.js fs/promises APIs.
  */
 
+import { env } from 'cloudflare:workers';
 import { R2Filesystem } from 'r2-fs';
-import { mount, withMounts } from 'worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';
 
 interface Env {
@@ -15,29 +16,27 @@ interface Env {
 
 const MOUNT_PATH = '/storage';
 
+// Mount the R2 bucket as a filesystem at module initialization
+const r2fs = new R2Filesystem(env.STORAGE);
+mount(MOUNT_PATH, r2fs);
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    return withMounts(async () => {
-      // Mount the R2 bucket as a filesystem
-      const r2fs = new R2Filesystem(env.STORAGE);
-      mount(MOUNT_PATH, r2fs);
+  async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
 
-      const url = new URL(request.url);
+    // Serve the HTML UI
+    if (url.pathname === '/' && request.method === 'GET') {
+      return new Response(HTML_UI, {
+        headers: { 'Content-Type': 'text/html' },
+      });
+    }
 
-      // Serve the HTML UI
-      if (url.pathname === '/' && request.method === 'GET') {
-        return new Response(HTML_UI, {
-          headers: { 'Content-Type': 'text/html' },
-        });
-      }
+    // API endpoints
+    if (url.pathname.startsWith('/api/')) {
+      return handleApi(request, url);
+    }
 
-      // API endpoints
-      if (url.pathname.startsWith('/api/')) {
-        return handleApi(request, url);
-      }
-
-      return new Response('Not Found', { status: 404 });
-    });
+    return new Response('Not Found', { status: 404 });
   },
 };
 
