@@ -57,7 +57,7 @@ function validateMountPath(path: string): void {
  *
  * @example
  * ```typescript
- * import { mount } from '@cloudflare/worker-fs-mount';
+ * import { mount } from 'worker-fs-mount';
  *
  * const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
  * // ... use fs operations ...

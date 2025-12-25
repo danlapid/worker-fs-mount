@@ -1,4 +1,4 @@
-# @cloudflare/worker-fs-mount
+# worker-fs-mount
 
 Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers. This package provides a drop-in replacement for `node:fs/promises` that intercepts filesystem calls and redirects them to your WorkerEntrypoint implementations via jsrpc.
 
@@ -13,7 +13,7 @@ Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers. This packa
 ## Installation
 
 ```bash
-npm install @cloudflare/worker-fs-mount
+npm install worker-fs-mount
 ```
 
 ## Setup
@@ -22,7 +22,7 @@ Add the following alias to your `wrangler.toml`:
 
 ```toml
 [alias]
-"node:fs/promises" = "@cloudflare/worker-fs-mount/fs"
+"node:fs/promises" = "worker-fs-mount/fs"
 ```
 
 This replaces `node:fs/promises` imports with our mount-aware implementation at build time.
@@ -30,7 +30,7 @@ This replaces `node:fs/promises` imports with our mount-aware implementation at 
 ## Quick Start
 
 ```typescript
-import { mount } from '@cloudflare/worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';
 
 export default {
@@ -118,7 +118,7 @@ Your entrypoint must implement the `WorkerFilesystem` interface. Here's a minima
 
 ```typescript
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { WorkerFilesystem, Stat, DirEntry } from '@cloudflare/worker-fs-mount';
+import type { WorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
 
 export class MemoryFS extends WorkerEntrypoint implements WorkerFilesystem {
   #files = new Map<string, Uint8Array>();

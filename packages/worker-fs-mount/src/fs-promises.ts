@@ -5,7 +5,7 @@
  * Users should alias this in their wrangler.toml:
  *
  * [alias]
- * "node:fs/promises" = "@cloudflare/worker-fs-mount/fs"
+ * "node:fs/promises" = "worker-fs-mount/fs"
  */
 
 // Import the SYNC fs module and use .promises to avoid alias loop

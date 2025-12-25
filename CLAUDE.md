@@ -4,14 +4,14 @@ This file provides guidance to Claude Code when working with this repository.
 
 ## Project Overview
 
-**@cloudflare/worker-fs-mount** is an npm package that allows Cloudflare Workers to mount WorkerEntrypoints as virtual filesystems. It provides a drop-in replacement for `node:fs/promises` that intercepts filesystem calls and redirects mounted paths to WorkerEntrypoint implementations via jsrpc.
+**worker-fs-mount** is an npm package that allows Cloudflare Workers to mount WorkerEntrypoints as virtual filesystems. It provides a drop-in replacement for `node:fs/promises` that intercepts filesystem calls and redirects mounted paths to WorkerEntrypoint implementations via jsrpc.
 
 ### Key Concept
 
 Users call `mount('/mnt/path', stub)` where `stub` is a WorkerEntrypoint (from `ctx.exports`, `env.SERVICE`, or a Durable Object stub). After mounting, any `node:fs/promises` operation targeting that path is forwarded to the stub's methods.
 
 ```typescript
-import { mount } from '@cloudflare/worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';  // Aliased to our implementation
 
 mount('/mnt/storage', env.STORAGE_SERVICE);
@@ -70,7 +70,7 @@ The package uses wrangler's `[alias]` feature to replace `node:fs/promises` at b
 1. Users add an alias in their `wrangler.toml`:
    ```toml
    [alias]
-   "node:fs/promises" = "@cloudflare/worker-fs-mount/fs"
+   "node:fs/promises" = "worker-fs-mount/fs"
    ```
 
 2. **`fs-promises.ts`** exports all standard `node:fs/promises` functions

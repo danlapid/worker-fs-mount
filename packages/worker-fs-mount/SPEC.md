@@ -2,12 +2,12 @@
 
 ## Overview
 
-An npm package (`@cloudflare/worker-fs-mount`) that allows Workers to mount a `WorkerEntrypoint` as a virtual filesystem. The package monkey-patches `node:fs/promises` to intercept calls and redirect mounted paths to the entrypoint via jsrpc.
+An npm package (`worker-fs-mount`) that allows Workers to mount a `WorkerEntrypoint` as a virtual filesystem. The package monkey-patches `node:fs/promises` to intercept calls and redirect mounted paths to the entrypoint via jsrpc.
 
 ## Installation
 
 ```bash
-npm install @cloudflare/worker-fs-mount
+npm install worker-fs-mount
 ```
 
 ## API
@@ -15,7 +15,7 @@ npm install @cloudflare/worker-fs-mount
 ### `mount(path, stub)`
 
 ```typescript
-import { mount } from '@cloudflare/worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';  // Works normally after import!
 
 const handle = mount('/mnt/remote', env.STORAGE_SERVICE);
@@ -41,7 +41,7 @@ Importing the package automatically patches `node:fs/promises`. No need to chang
 
 ```typescript
 // Just import mount - this patches node:fs/promises as a side effect
-import { mount } from '@cloudflare/worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 
 // Your existing code continues to work
 import fs from 'node:fs/promises';
@@ -56,7 +56,7 @@ await readFile('/mnt/data/file.txt');          // ✓ works
 ## Example Usage
 
 ```typescript
-import { mount } from '@cloudflare/worker-fs-mount';
+import { mount } from 'worker-fs-mount';
 import fs from 'node:fs/promises';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
