@@ -98,6 +98,26 @@ export function mount(path: string, stub: WorkerFilesystem): MountHandle {
 }
 
 /**
+ * Unmount a filesystem at the specified path.
+ *
+ * @param path - The mount point to unmount
+ * @returns True if a mount was removed, false if nothing was mounted at that path
+ *
+ * @example
+ * ```typescript
+ * import { mount, unmount } from 'worker-fs-mount';
+ *
+ * mount('/mnt/storage', env.STORAGE_SERVICE);
+ * // ... use fs operations ...
+ * unmount('/mnt/storage');
+ * ```
+ */
+export function unmount(path: string): boolean {
+  const normalized = normalizePath(path);
+  return mounts.delete(normalized);
+}
+
+/**
  * Find the mount that handles a given path.
  *
  * @param path - The path to look up

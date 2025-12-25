@@ -79,20 +79,18 @@ describe('worker-fs-mount integration tests', () => {
       expect(data.mounted).toBe('/mnt/test');
     });
 
-    it('should find mount for paths under mount point', async () => {
-      const res = await workerFetch('/findMount', { path: '/mnt/test/some/file.txt' });
+    it('should report mounted for paths under mount point', async () => {
+      const res = await workerFetch('/isMounted', { path: '/mnt/test/some/file.txt' });
       const data = (await res.json()) as any;
       expect(data.ok).toBe(true);
-      expect(data.match).not.toBeNull();
-      expect(data.match.mountPath).toBe('/mnt/test');
-      expect(data.match.relativePath).toBe('/some/file.txt');
+      expect(data.mounted).toBe(true);
     });
 
-    it('should not find mount for paths outside mount point', async () => {
-      const res = await workerFetch('/findMount', { path: '/other/path' });
+    it('should report not mounted for paths outside mount point', async () => {
+      const res = await workerFetch('/isMounted', { path: '/other/path' });
       const data = (await res.json()) as any;
       expect(data.ok).toBe(true);
-      expect(data.match).toBeNull();
+      expect(data.mounted).toBe(false);
     });
   });
 
@@ -166,31 +164,6 @@ describe('worker-fs-mount integration tests', () => {
       const res = await workerFetch('/readFile', { path: '/unicode.txt' });
       const data = (await res.json()) as any;
       expect(data.content).toBe(unicodeContent);
-    });
-  });
-
-  // ============================================
-  // Chunked Operations via Worker Requests
-  // ============================================
-
-  describe('chunked operations', () => {
-    beforeEach(async () => {
-      await workerFetch('/writeFile', { path: '/file.txt', content: '0123456789' });
-    });
-
-    it('should read chunk at offset', async () => {
-      const res = await workerFetch('/read', { path: '/file.txt', offset: 3, length: 4 });
-      const data = (await res.json()) as any;
-      expect(data.ok).toBe(true);
-      expect(data.content).toBe('3456');
-    });
-
-    it('should write at offset', async () => {
-      await workerFetch('/write', { path: '/file.txt', content: 'XXX', offset: 3 });
-
-      const res = await workerFetch('/readFile', { path: '/file.txt' });
-      const data = (await res.json()) as any;
-      expect(data.content).toBe('012XXX6789');
     });
   });
 
@@ -517,26 +490,26 @@ describe('worker-fs-mount integration tests', () => {
   });
 
   // ============================================
-  // Full Integration: findMount + stub.readFile
+  // Full Integration: mount routing
   // ============================================
 
-  describe('full integration: findMount and stub calls', () => {
-    it('should read file via findMount pattern', async () => {
+  describe('full integration: mount routing', () => {
+    it('should read file using full mount path', async () => {
       // Write file first
       await workerFetch('/writeFile', { path: '/test.txt', content: 'hello from mount' });
 
-      // Read via findMount (this simulates what fs-promises.ts does)
-      const res = await workerFetch('/readFileViaFindMount', { fullPath: '/mnt/test/test.txt' });
+      // Read using full path (tests that fs module routes through mount)
+      const res = await workerFetch('/readFileFullPath', { fullPath: '/mnt/test/test.txt' });
       const data = (await res.json()) as any;
       expect(data.ok).toBe(true);
       expect(data.content).toBe('hello from mount');
     });
 
-    it('should compute correct relative paths', async () => {
+    it('should handle deeply nested paths with full mount path', async () => {
       await workerFetch('/mkdir', { path: '/a/b/c', options: { recursive: true } });
       await workerFetch('/writeFile', { path: '/a/b/c/deep.txt', content: 'deep content' });
 
-      const res = await workerFetch('/readFileViaFindMount', {
+      const res = await workerFetch('/readFileFullPath', {
         fullPath: '/mnt/test/a/b/c/deep.txt',
       });
       const data = (await res.json()) as any;

@@ -1,5 +1,5 @@
 /**
- * @cloudflare/worker-fs-mount
+ * worker-fs-mount
  *
  * Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers.
  *
@@ -9,38 +9,31 @@
  *
  * ```toml
  * [alias]
- * "node:fs/promises" = "@cloudflare/worker-fs-mount/fs"
+ * "node:fs/promises" = "worker-fs-mount/fs"
  * ```
  *
  * ## Usage
  *
  * ```typescript
- * import { mount } from '@cloudflare/worker-fs-mount';
+ * import { mount } from 'worker-fs-mount';
  * import fs from 'node:fs/promises';
  *
  * // Mount a WorkerEntrypoint
- * const handle = mount('/mnt/storage', env.STORAGE_SERVICE);
+ * mount('/mnt/storage', env.STORAGE_SERVICE);
  *
  * // Use standard fs operations - they're automatically intercepted
  * await fs.writeFile('/mnt/storage/file.txt', 'Hello, World!');
  * const content = await fs.readFile('/mnt/storage/file.txt', 'utf8');
  *
  * // Unmount when done
- * handle.unmount();
+ * unmount('/mnt/storage');
  * ```
  *
  * @packageDocumentation
  */
 
-// Export mount functions
-export { mount, findMount, isMounted, getMounts, clearMounts } from './registry.js';
+// Export public API
+export { mount, unmount, isMounted } from './registry.js';
 
 // Export types
-export type {
-  WorkerFilesystem,
-  Stat,
-  DirEntry,
-  MountHandle,
-  Mount,
-  MountMatch,
-} from './types.js';
+export type { WorkerFilesystem, Stat, DirEntry } from './types.js';

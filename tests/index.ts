@@ -1,12 +1,11 @@
 // Worker entry point for integration tests
 // Tests the actual library: mount() + aliased node:fs/promises
 
-import { mount, clearMounts, findMount } from 'worker-fs-mount';
+import { mount, unmount, isMounted } from 'worker-fs-mount';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
 
 export { MemoryFilesystem, resetMemoryFilesystem } from './memory-filesystem.js';
-
 
 // Helper to wrap async operations and catch errors properly
 async function safeCall<T>(fn: () => Promise<T>): Promise<{ result?: T; error?: string }> {
@@ -26,14 +25,16 @@ export default {
     const endpoint = url.pathname;
 
     try {
-      // Get the MemoryFilesystem entrypoint from ctx.exports
-      // Ensure mount exists for operations
-      if (!findMount(MOUNT_PATH)) {
+      // Ensure mount exists for operations (except setup/reset which manage the mount)
+      if (endpoint !== '/setup' && endpoint !== '/reset' && !isMounted(MOUNT_PATH)) {
         mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
       }
 
       if (endpoint === '/setup') {
-        clearMounts();
+        // Unmount if already mounted, then remount fresh
+        if (isMounted(MOUNT_PATH)) {
+          unmount(MOUNT_PATH);
+        }
         mount(MOUNT_PATH, ctx.exports.MemoryFilesystem);
         return Response.json({ ok: true, mounted: MOUNT_PATH });
       }
@@ -41,8 +42,15 @@ export default {
       if (endpoint === '/reset') {
         const { resetMemoryFilesystem } = await import('./memory-filesystem.js');
         resetMemoryFilesystem();
-        clearMounts();
+        if (isMounted(MOUNT_PATH)) {
+          unmount(MOUNT_PATH);
+        }
         return Response.json({ ok: true });
+      }
+
+      if (endpoint === '/isMounted') {
+        const body = (await request.json()) as { path: string };
+        return Response.json({ ok: true, mounted: isMounted(body.path) });
       }
 
       // ============================================
@@ -192,48 +200,9 @@ export default {
         return Response.json({ ok: true });
       }
 
-      // For chunked read/write, use the stub directly (no fs equivalent)
-      if (endpoint === '/read') {
-        const body = (await request.json()) as { path: string; offset: number; length: number };
-        const match = findMount(`${MOUNT_PATH}${body.path}`);
-        if (!match) return Response.json({ ok: false, error: 'Mount not found' }, { status: 500 });
-        const { result: chunk, error } = await safeCall(() =>
-          match.mount.stub.read!(match.relativePath, { offset: body.offset, length: body.length })
-        );
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, content: new TextDecoder().decode(chunk!) });
-      }
-
-      if (endpoint === '/write') {
-        const body = (await request.json()) as { path: string; content: string; offset: number };
-        const match = findMount(`${MOUNT_PATH}${body.path}`);
-        if (!match) return Response.json({ ok: false, error: 'Mount not found' }, { status: 500 });
-        const data = new TextEncoder().encode(body.content);
-        const { result: bytesWritten, error } = await safeCall(() =>
-          match.mount.stub.write!(match.relativePath, data, { offset: body.offset })
-        );
-        if (error) return Response.json({ ok: false, error }, { status: 500 });
-        return Response.json({ ok: true, bytesWritten });
-      }
-
-      if (endpoint === '/findMount') {
-        const body = (await request.json()) as { path: string };
-        const match = findMount(body.path);
-        if (!match) {
-          return Response.json({ ok: true, match: null });
-        }
-        return Response.json({
-          ok: true,
-          match: {
-            mountPath: match.mount.path,
-            relativePath: match.relativePath,
-          },
-        });
-      }
-
-      if (endpoint === '/readFileViaFindMount') {
+      if (endpoint === '/readFileFullPath') {
         const body = (await request.json()) as { fullPath: string };
-        // Uses the aliased fs.readFile which routes through findMount
+        // Uses the aliased fs.readFile with a full path (tests that mount routing works)
         const { result: content, error } = await safeCall(() => fs.readFile(body.fullPath, 'utf8'));
         if (error) return Response.json({ ok: false, error }, { status: 500 });
         return Response.json({ ok: true, content });
