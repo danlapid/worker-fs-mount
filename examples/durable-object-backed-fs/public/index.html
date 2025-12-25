@@ -31,6 +31,17 @@
       padding: 16px;
       margin-bottom: 16px;
     }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.2s;
+    }
+    button:hover { background: #1d4ed8; }
     .breadcrumb {
       display: flex;
       align-items: center;
@@ -57,17 +68,6 @@
       margin-bottom: 16px;
       flex-wrap: wrap;
     }
-    button {
-      background: #2563eb;
-      color: white;
-      border: none;
-      padding: 8px 16px;
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 0.85rem;
-      transition: background 0.2s;
-    }
-    button:hover { background: #1d4ed8; }
     button.secondary {
       background: #333;
     }
@@ -284,7 +284,7 @@
     };
 
     async function api(endpoint, path, options = {}) {
-      const url = '/api/' + endpoint + '?path=' + encodeURIComponent(path);
+      const url = `/api/${endpoint}?path=${encodeURIComponent(path)}`;
       const res = await fetch(url, options);
       return res.json();
     }
@@ -292,8 +292,8 @@
     function showStatus(message, isError = false) {
       const el = document.getElementById('status');
       el.textContent = message;
-      el.className = 'status ' + (isError ? 'error' : 'success');
-      setTimeout(() => el.className = 'status', 3000);
+      el.className = `status ${isError ? 'error' : 'success'}`;
+      setTimeout(() => { el.className = 'status'; }, 3000);
     }
 
     function updateBreadcrumb() {
@@ -301,9 +301,9 @@
       let html = '<button onclick="navigateTo(\'/\')">root</button>';
       let path = '';
       for (const part of parts) {
-        path += '/' + part;
+        path += `/${part}`;
         const p = path;
-        html += '<span>/</span><button onclick="navigateTo(\'' + p + '\')">' + part + '</button>';
+        html += `<span>/</span><button onclick="navigateTo('${p}')">${part}</button>`;
       }
       document.getElementById('breadcrumb').innerHTML = html;
     }
@@ -318,7 +318,7 @@
         const list = document.getElementById('fileList');
 
         if (!data.success) {
-          list.innerHTML = '<div class="empty">Error: ' + data.error + '</div>';
+          list.innerHTML = `<div class="empty">Error: ${data.error}</div>`;
           return;
         }
 
@@ -341,26 +341,26 @@
             '<span class="file-type">' + item.type + '</span>' +
           '</div>'
         ).join('');
-      } catch (err) {
+      } catch (_err) {
         document.getElementById('fileList').innerHTML = '<div class="empty">Error loading directory</div>';
       }
     }
 
-    function selectItem(el) {
-      document.querySelectorAll('.file-item').forEach(e => e.classList.remove('selected'));
+    function _selectItem(el) {
+      document.querySelectorAll('.file-item').forEach(e => { e.classList.remove('selected'); });
       el.classList.add('selected');
       selectedItem = { name: el.dataset.name, type: el.dataset.type };
       document.getElementById('deleteBtn').style.display = 'inline-block';
     }
 
-    function openItem(el) {
+    function _openItem(el) {
       const name = el.dataset.name;
       const type = el.dataset.type;
 
       if (type === 'directory') {
-        navigateTo(currentPath === '/' ? '/' + name : currentPath + '/' + name);
+        navigateTo(currentPath === '/' ? `/${name}` : `${currentPath}/${name}`);
       } else {
-        openFile(currentPath === '/' ? '/' + name : currentPath + '/' + name);
+        openFile(currentPath === '/' ? `/${name}` : `${currentPath}/${name}`);
       }
     }
 
@@ -374,22 +374,22 @@
       try {
         const data = await api('read', path);
         if (!data.success) {
-          showStatus('Error: ' + data.error, true);
+          showStatus(`Error: ${data.error}`, true);
           return;
         }
 
         currentFile = path;
         document.getElementById('editorTitle').textContent = path.split('/').pop();
         document.getElementById('editorMeta').textContent =
-          'Size: ' + data.size + ' bytes | Modified: ' + new Date(data.modified).toLocaleString();
+          `Size: ${data.size} bytes | Modified: ${new Date(data.modified).toLocaleString()}`;
         document.getElementById('editor').value = data.content;
         document.getElementById('editorContainer').classList.add('active');
-      } catch (err) {
+      } catch (_err) {
         showStatus('Error opening file', true);
       }
     }
 
-    async function saveFile() {
+    async function _saveFile() {
       if (!currentFile) return;
 
       try {
@@ -404,9 +404,9 @@
           showStatus('File saved');
           refresh();
         } else {
-          showStatus('Error: ' + data.error, true);
+          showStatus(`Error: ${data.error}`, true);
         }
-      } catch (err) {
+      } catch (_err) {
         showStatus('Error saving file', true);
       }
     }
@@ -416,27 +416,27 @@
       document.getElementById('editorContainer').classList.remove('active');
     }
 
-    function showNewFileModal() {
+    function _showNewFileModal() {
       document.getElementById('newFileModal').classList.add('active');
       document.getElementById('newFileName').value = '';
       document.getElementById('newFileName').focus();
     }
 
-    function showNewFolderModal() {
+    function _showNewFolderModal() {
       document.getElementById('newFolderModal').classList.add('active');
       document.getElementById('newFolderName').value = '';
       document.getElementById('newFolderName').focus();
     }
 
     function closeModals() {
-      document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
+      document.querySelectorAll('.modal-overlay').forEach(m => { m.classList.remove('active'); });
     }
 
-    async function createFile() {
+    async function _createFile() {
       const name = document.getElementById('newFileName').value.trim();
       if (!name) return;
 
-      const path = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+      const path = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
 
       try {
         const data = await api('write', path, {
@@ -450,18 +450,18 @@
           closeModals();
           refresh();
         } else {
-          showStatus('Error: ' + data.error, true);
+          showStatus(`Error: ${data.error}`, true);
         }
-      } catch (err) {
+      } catch (_err) {
         showStatus('Error creating file', true);
       }
     }
 
-    async function createFolder() {
+    async function _createFolder() {
       const name = document.getElementById('newFolderName').value.trim();
       if (!name) return;
 
-      const path = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+      const path = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
 
       try {
         const data = await api('mkdir', path, { method: 'POST' });
@@ -471,20 +471,20 @@
           closeModals();
           refresh();
         } else {
-          showStatus('Error: ' + data.error, true);
+          showStatus(`Error: ${data.error}`, true);
         }
-      } catch (err) {
+      } catch (_err) {
         showStatus('Error creating folder', true);
       }
     }
 
-    async function deleteSelected() {
+    async function _deleteSelected() {
       if (!selectedItem) return;
 
       const name = selectedItem.name;
-      const path = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+      const path = currentPath === '/' ? `/${name}` : `${currentPath}/${name}`;
 
-      if (!confirm('Delete "' + name + '"?')) return;
+      if (!confirm(`Delete "${name}"?`)) return;
 
       try {
         const data = await api('delete', path, { method: 'POST' });
@@ -493,9 +493,9 @@
           showStatus('Deleted');
           refresh();
         } else {
-          showStatus('Error: ' + data.error, true);
+          showStatus(`Error: ${data.error}`, true);
         }
-      } catch (err) {
+      } catch (_err) {
         showStatus('Error deleting', true);
       }
     }

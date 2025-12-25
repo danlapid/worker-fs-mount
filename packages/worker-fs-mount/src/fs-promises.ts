@@ -273,8 +273,7 @@ export async function writeFile(
         }
       }
 
-      const flag =
-        typeof options === 'object' && options !== null ? options.flag : undefined;
+      const flag = typeof options === 'object' && options !== null ? options.flag : undefined;
       const isAppend = flag === 'a' || flag === 'a+';
       const isExclusive = flag === 'wx' || flag === 'xw';
 

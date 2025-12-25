@@ -282,7 +282,7 @@ export class MemoryFilesystem extends WorkerEntrypoint implements WorkerFilesyst
         if (relativePath.includes('/')) continue;
       }
 
-      const name = options?.recursive ? relativePath : relativePath.split('/')[0]!;
+      const name = options?.recursive ? relativePath : (relativePath.split('/')[0] ?? '');
       if (seen.has(name)) continue;
       seen.add(name);
 

@@ -57,8 +57,11 @@ export class R2Filesystem implements WorkerFilesystem {
   private parseMetadata(obj: R2Object): R2FsMetadata {
     const meta = obj.customMetadata;
     return {
+      // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket notation for index signatures
       type: (meta?.['type'] as R2FsMetadata['type']) ?? 'file',
+      // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket notation for index signatures
       created: meta?.['created'] ?? obj.uploaded.toISOString(),
+      // biome-ignore lint/complexity/useLiteralKeys: TypeScript requires bracket notation for index signatures
       symlinkTarget: meta?.['symlinkTarget'],
     };
   }

@@ -70,24 +70,17 @@ import { WorkerEntrypoint } from 'cloudflare:workers';
 export class MyFilesystem extends WorkerEntrypoint<Env> implements WorkerFilesystem {
   private fs = new R2Filesystem(this.env.MY_BUCKET);
 
+  // Required methods (6)
   stat = this.fs.stat.bind(this.fs);
-  readFile = this.fs.readFile.bind(this.fs);
-  writeFile = this.fs.writeFile.bind(this.fs);
+  createReadStream = this.fs.createReadStream.bind(this.fs);
+  createWriteStream = this.fs.createWriteStream.bind(this.fs);
   readdir = this.fs.readdir.bind(this.fs);
   mkdir = this.fs.mkdir.bind(this.fs);
   rm = this.fs.rm.bind(this.fs);
-  unlink = this.fs.unlink.bind(this.fs);
-  rename = this.fs.rename.bind(this.fs);
-  cp = this.fs.cp.bind(this.fs);
+
+  // Optional methods (2)
   symlink = this.fs.symlink.bind(this.fs);
   readlink = this.fs.readlink.bind(this.fs);
-  truncate = this.fs.truncate.bind(this.fs);
-  access = this.fs.access.bind(this.fs);
-  setLastModified = this.fs.setLastModified.bind(this.fs);
-  read = this.fs.read.bind(this.fs);
-  write = this.fs.write.bind(this.fs);
-  createReadStream = this.fs.createReadStream.bind(this.fs);
-  createWriteStream = this.fs.createWriteStream.bind(this.fs);
 }
 ```
 
@@ -116,8 +109,7 @@ Data is stored in R2 using the following conventions:
 ## Limitations
 
 - **File size**: R2 supports files up to 5GB, but very large files may impact performance
-- **Partial writes**: R2 doesn't support partial writes, so `write()` at offset requires read-modify-write
-- **Modification time**: `setLastModified()` is a no-op as R2 doesn't support updating metadata without re-uploading
+- **Partial writes**: R2 doesn't support partial writes, so writing at an offset requires read-modify-write
 - **Streaming writes**: Streams buffer content in memory before writing to R2
 
 ## R2 vs Durable Object Storage
