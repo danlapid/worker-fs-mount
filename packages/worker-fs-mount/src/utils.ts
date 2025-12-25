@@ -44,8 +44,9 @@ export function createFsError(code: FsErrorCode, path: string): Error {
  * @returns The normalized path, always starting with /
  */
 export function normalizePath(path: string): string {
-  // Collapse multiple slashes into one
-  let normalized = path.replace(/\/+/g, '/');
+  if (!path) return '/';
+  // Collapse multiple slashes and resolve . segments
+  let normalized = path.replace(/\/+/g, '/').replace(/\/\.\//g, '/');
   // Remove trailing slash unless it's the root
   if (normalized !== '/' && normalized.endsWith('/')) {
     normalized = normalized.slice(0, -1);
@@ -54,7 +55,7 @@ export function normalizePath(path: string): string {
   if (!normalized.startsWith('/')) {
     normalized = `/${normalized}`;
   }
-  return normalized;
+  return normalized || '/';
 }
 
 /**

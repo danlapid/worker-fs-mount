@@ -59,41 +59,10 @@ export default {
 
 ## API
 
-The `MemoryFilesystem` class extends `WorkerEntrypoint` and implements the full `WorkerFilesystem` interface:
+The `MemoryFilesystem` class extends `WorkerEntrypoint` and implements the full `WorkerFilesystem` interface. See the [worker-fs-mount README](../worker-fs-mount/README.md) for the complete API reference.
 
-### Core Operations
-
-| Method | Description |
-|--------|-------------|
-| `stat(path, options?)` | Get file/directory metadata |
-| `readFile(path)` | Read entire file contents |
-| `writeFile(path, data, options?)` | Write file contents |
-| `readdir(path, options?)` | List directory contents |
-| `mkdir(path, options?)` | Create a directory |
-| `rm(path, options?)` | Remove file or directory |
-| `unlink(path)` | Remove file or symlink |
-
-### Additional Operations
-
-| Method | Description |
-|--------|-------------|
-| `read(path, options)` | Read chunk at offset |
-| `write(path, data, options)` | Write at offset |
-| `createReadStream(path, options?)` | Create readable stream |
-| `createWriteStream(path, options?)` | Create writable stream |
-| `truncate(path, length?)` | Truncate file |
-| `setLastModified(path, mtime)` | Set modification time |
-| `symlink(linkPath, targetPath)` | Create symbolic link |
-| `readlink(path)` | Read symlink target |
-| `rename(oldPath, newPath)` | Rename/move file |
-| `cp(src, dest, options?)` | Copy file or directory |
-| `access(path, mode?)` | Check if path exists |
-
-### Static Methods
-
-| Method | Description |
-|--------|-------------|
-| `MemoryFilesystem.resetState()` | Reset the shared filesystem state to empty (useful for testing) |
+**Additional method:**
+- `MemoryFilesystem.resetState()` - Reset the shared filesystem state to empty (useful for testing)
 
 ## Storage
 

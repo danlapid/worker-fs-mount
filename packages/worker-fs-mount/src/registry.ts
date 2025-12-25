@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { WorkerFilesystem } from './types.js';
+import { normalizePath } from './utils.js';
 
 /**
  * Internal mount structure.
@@ -40,26 +41,6 @@ function getMountRegistry(): Map<string, Mount> {
  * Reserved paths that cannot be mounted over.
  */
 const RESERVED_PATHS = ['/bundle', '/tmp', '/dev'];
-
-/**
- * Normalize a path for consistent matching.
- * - Removes trailing slashes (except for root)
- * - Collapses multiple slashes
- * - Resolves . segments
- */
-function normalizePath(path: string): string {
-  if (!path) return '/';
-
-  // Collapse multiple slashes and remove trailing slash
-  let normalized = path.replace(/\/+/g, '/').replace(/\/\.\//g, '/');
-
-  // Remove trailing slash unless it's the root
-  if (normalized.length > 1 && normalized.endsWith('/')) {
-    normalized = normalized.slice(0, -1);
-  }
-
-  return normalized || '/';
-}
 
 /**
  * Validate a mount path.
