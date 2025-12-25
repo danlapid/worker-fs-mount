@@ -2,11 +2,25 @@
 
 Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers.
 
+## Try It Out
+
+See it in action with an interactive filesystem explorer backed by a Durable Object:
+
+```bash
+git clone https://github.com/cloudflare/worker-fs-mount
+cd worker-fs-mount
+pnpm install
+pnpm example
+```
+
+Open http://localhost:8787 to create, edit, and delete files - all persisted in SQLite via a Durable Object, using standard `node:fs/promises` APIs.
+
 ## Packages
 
 | Package | Description |
 |---------|-------------|
 | [`worker-fs-mount`](./packages/worker-fs-mount) | Main package - drop-in replacement for `node:fs/promises` with mount support |
+| [`durable-object-fs`](./packages/durable-object-fs) | Durable Object implementing a filesystem with SQLite storage |
 
 ## Quick Start
 

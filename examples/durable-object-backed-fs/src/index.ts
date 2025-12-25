@@ -1,0 +1,665 @@
+/**
+ * Example: Durable Object-backed Filesystem
+ *
+ * This example demonstrates using worker-fs-mount and durable-object-fs
+ * to store files persistently in a Durable Object using standard Node.js
+ * fs/promises APIs.
+ */
+
+import { DurableObjectFilesystem } from 'durable-object-fs';
+import { mount, withMounts } from 'worker-fs-mount';
+import { WorkerEntrypoint } from 'cloudflare:workers';
+import fs from 'node:fs/promises';
+
+// Re-export the Durable Object class
+export { DurableObjectFilesystem };
+
+const MOUNT_PATH = '/data';
+
+export default class extends WorkerEntrypoint<Env> {
+  async fetch(request: Request): Promise<Response> {
+    return withMounts(async () => {
+      // Mount the Durable Object filesystem
+      const id = this.ctx.exports.DurableObjectFilesystem.idFromName('demo');
+      const stub = this.ctx.exports.DurableObjectFilesystem.get(id);
+      mount(MOUNT_PATH, stub);
+
+      const url = new URL(request.url);
+
+      // Serve the HTML UI
+      if (url.pathname === '/' && request.method === 'GET') {
+        return new Response(HTML_UI, {
+          headers: { 'Content-Type': 'text/html' },
+        });
+      }
+
+      // API endpoints
+      if (url.pathname.startsWith('/api/')) {
+        return this.handleApi(request, url);
+      }
+
+      return new Response('Not Found', { status: 404 });
+    });
+  }
+
+  async handleApi(request: Request, url: URL): Promise<Response> {
+    const path = MOUNT_PATH + (url.searchParams.get('path') || '/');
+
+    try {
+      switch (url.pathname) {
+        case '/api/list': {
+          const entries = await fs.readdir(path, { withFileTypes: true });
+          const items = entries.map((e: { name: string; isDirectory(): boolean; isSymbolicLink(): boolean }) => ({
+            name: e.name,
+            type: e.isDirectory() ? 'directory' : e.isSymbolicLink() ? 'symlink' : 'file',
+          }));
+          return Response.json({ success: true, items });
+        }
+
+        case '/api/read': {
+          const content = await fs.readFile(path, 'utf8');
+          const stats = await fs.stat(path);
+          return Response.json({
+            success: true,
+            content,
+            size: stats.size,
+            modified: stats.mtime,
+          });
+        }
+
+        case '/api/write': {
+          if (request.method !== 'POST') {
+            return Response.json({ success: false, error: 'Method not allowed' }, { status: 405 });
+          }
+          const { content } = (await request.json()) as { content: string };
+          await fs.writeFile(path, content);
+          return Response.json({ success: true });
+        }
+
+        case '/api/mkdir': {
+          if (request.method !== 'POST') {
+            return Response.json({ success: false, error: 'Method not allowed' }, { status: 405 });
+          }
+          await fs.mkdir(path, { recursive: true });
+          return Response.json({ success: true });
+        }
+
+        case '/api/delete': {
+          if (request.method !== 'POST') {
+            return Response.json({ success: false, error: 'Method not allowed' }, { status: 405 });
+          }
+          const stats = await fs.stat(path);
+          if (stats.isDirectory()) {
+            await fs.rm(path, { recursive: true });
+          } else {
+            await fs.unlink(path);
+          }
+          return Response.json({ success: true });
+        }
+
+        case '/api/rename': {
+          if (request.method !== 'POST') {
+            return Response.json({ success: false, error: 'Method not allowed' }, { status: 405 });
+          }
+          const { newPath } = (await request.json()) as { newPath: string };
+          await fs.rename(path, MOUNT_PATH + newPath);
+          return Response.json({ success: true });
+        }
+
+        case '/api/stat': {
+          const stats = await fs.stat(path);
+          return Response.json({
+            success: true,
+            stat: {
+              type: stats.isDirectory() ? 'directory' : stats.isSymbolicLink() ? 'symlink' : 'file',
+              size: stats.size,
+              modified: stats.mtime,
+              created: stats.birthtime,
+            },
+          });
+        }
+
+        default:
+          return Response.json({ success: false, error: 'Unknown endpoint' }, { status: 404 });
+      }
+    } catch (err) {
+      const error = err as Error & { code?: string };
+      return Response.json(
+        {
+          success: false,
+          error: error.message,
+          code: error.code,
+        },
+        { status: error.code === 'ENOENT' ? 404 : 500 }
+      );
+    }
+  }
+}
+
+const HTML_UI = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Durable Object Filesystem Explorer</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0a;
+      color: #e5e5e5;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .container { max-width: 900px; margin: 0 auto; }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 8px;
+      color: #fff;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 24px;
+      font-size: 0.9rem;
+    }
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+    }
+    .breadcrumb {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .breadcrumb span {
+      color: #666;
+    }
+    .breadcrumb button {
+      background: none;
+      border: none;
+      color: #3b82f6;
+      cursor: pointer;
+      padding: 4px 8px;
+      border-radius: 4px;
+      font-size: 0.9rem;
+    }
+    .breadcrumb button:hover { background: #1e3a5f; }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: background 0.2s;
+    }
+    button:hover { background: #1d4ed8; }
+    button.secondary {
+      background: #333;
+    }
+    button.secondary:hover { background: #444; }
+    button.danger { background: #dc2626; }
+    button.danger:hover { background: #b91c1c; }
+    .file-list {
+      border: 1px solid #333;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .file-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 16px;
+      border-bottom: 1px solid #333;
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+    .file-item:last-child { border-bottom: none; }
+    .file-item:hover { background: #252525; }
+    .file-item.selected { background: #1e3a5f; }
+    .file-icon {
+      width: 24px;
+      margin-right: 12px;
+      text-align: center;
+    }
+    .file-name { flex: 1; }
+    .file-type {
+      color: #666;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+    }
+    .empty {
+      padding: 40px;
+      text-align: center;
+      color: #666;
+    }
+    .editor-container { display: none; }
+    .editor-container.active { display: block; }
+    .editor-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+    .editor-title {
+      font-weight: 600;
+      color: #fff;
+    }
+    .editor-meta {
+      font-size: 0.8rem;
+      color: #666;
+    }
+    textarea {
+      width: 100%;
+      height: 300px;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #e5e5e5;
+      padding: 12px;
+      font-family: 'Monaco', 'Menlo', monospace;
+      font-size: 0.9rem;
+      resize: vertical;
+    }
+    textarea:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.7);
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal {
+      background: #1a1a1a;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 24px;
+      width: 400px;
+      max-width: 90vw;
+    }
+    .modal h3 { margin-bottom: 16px; color: #fff; }
+    .modal input {
+      width: 100%;
+      padding: 10px 12px;
+      background: #0a0a0a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      color: #e5e5e5;
+      margin-bottom: 16px;
+      font-size: 0.95rem;
+    }
+    .modal input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .modal-buttons {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+    }
+    .status {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      padding: 12px 20px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      display: none;
+    }
+    .status.success { display: block; background: #166534; }
+    .status.error { display: block; background: #991b1b; }
+    .info-box {
+      background: #1e3a5f;
+      border: 1px solid #3b82f6;
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 16px;
+      font-size: 0.85rem;
+      line-height: 1.5;
+    }
+    code {
+      background: #0a0a0a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.85em;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Durable Object Filesystem Explorer</h1>
+    <p class="subtitle">Files are stored persistently in a Durable Object using SQLite</p>
+
+    <div class="info-box">
+      This demo uses <code>node:fs/promises</code> APIs backed by a Durable Object.
+      All operations go through the standard fs API, which is aliased to <code>worker-fs-mount</code>.
+      Files persist across requests and Worker restarts.
+    </div>
+
+    <div class="card">
+      <div class="breadcrumb" id="breadcrumb"></div>
+
+      <div class="toolbar">
+        <button onclick="showNewFileModal()">New File</button>
+        <button onclick="showNewFolderModal()">New Folder</button>
+        <button class="secondary" onclick="refresh()">Refresh</button>
+        <button class="danger" onclick="deleteSelected()" id="deleteBtn" style="display:none">Delete</button>
+      </div>
+
+      <div class="file-list" id="fileList">
+        <div class="empty">Loading...</div>
+      </div>
+    </div>
+
+    <div class="card editor-container" id="editorContainer">
+      <div class="editor-header">
+        <div>
+          <div class="editor-title" id="editorTitle">file.txt</div>
+          <div class="editor-meta" id="editorMeta"></div>
+        </div>
+        <div>
+          <button onclick="saveFile()">Save</button>
+          <button class="secondary" onclick="closeEditor()">Close</button>
+        </div>
+      </div>
+      <textarea id="editor" placeholder="File contents..."></textarea>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="newFileModal">
+    <div class="modal">
+      <h3>Create New File</h3>
+      <input type="text" id="newFileName" placeholder="filename.txt" onkeydown="if(event.key==='Enter')createFile()">
+      <div class="modal-buttons">
+        <button class="secondary" onclick="closeModals()">Cancel</button>
+        <button onclick="createFile()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="newFolderModal">
+    <div class="modal">
+      <h3>Create New Folder</h3>
+      <input type="text" id="newFolderName" placeholder="folder-name" onkeydown="if(event.key==='Enter')createFolder()">
+      <div class="modal-buttons">
+        <button class="secondary" onclick="closeModals()">Cancel</button>
+        <button onclick="createFolder()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="status" id="status"></div>
+
+  <script>
+    let currentPath = '/';
+    let selectedItem = null;
+    let currentFile = null;
+
+    const icons = {
+      directory: '\uD83D\uDCC1',
+      file: '\uD83D\uDCC4',
+      symlink: '\uD83D\uDD17'
+    };
+
+    async function api(endpoint, path, options = {}) {
+      const url = '/api/' + endpoint + '?path=' + encodeURIComponent(path);
+      const res = await fetch(url, options);
+      return res.json();
+    }
+
+    function showStatus(message, isError = false) {
+      const el = document.getElementById('status');
+      el.textContent = message;
+      el.className = 'status ' + (isError ? 'error' : 'success');
+      setTimeout(() => el.className = 'status', 3000);
+    }
+
+    function updateBreadcrumb() {
+      const parts = currentPath.split('/').filter(Boolean);
+      let html = '<button onclick="navigateTo(\\'/\\')">root</button>';
+      let path = '';
+      for (const part of parts) {
+        path += '/' + part;
+        const p = path;
+        html += '<span>/</span><button onclick="navigateTo(\\'' + p + '\\')">' + part + '</button>';
+      }
+      document.getElementById('breadcrumb').innerHTML = html;
+    }
+
+    async function loadDirectory() {
+      updateBreadcrumb();
+      selectedItem = null;
+      document.getElementById('deleteBtn').style.display = 'none';
+
+      try {
+        const data = await api('list', currentPath);
+        const list = document.getElementById('fileList');
+
+        if (!data.success) {
+          list.innerHTML = '<div class="empty">Error: ' + data.error + '</div>';
+          return;
+        }
+
+        if (data.items.length === 0) {
+          list.innerHTML = '<div class="empty">This folder is empty</div>';
+          return;
+        }
+
+        // Sort: directories first, then files
+        data.items.sort((a, b) => {
+          if (a.type === 'directory' && b.type !== 'directory') return -1;
+          if (a.type !== 'directory' && b.type === 'directory') return 1;
+          return a.name.localeCompare(b.name);
+        });
+
+        list.innerHTML = data.items.map(item =>
+          '<div class="file-item" data-name="' + item.name + '" data-type="' + item.type + '" onclick="selectItem(this)" ondblclick="openItem(this)">' +
+            '<span class="file-icon">' + icons[item.type] + '</span>' +
+            '<span class="file-name">' + item.name + '</span>' +
+            '<span class="file-type">' + item.type + '</span>' +
+          '</div>'
+        ).join('');
+      } catch (err) {
+        document.getElementById('fileList').innerHTML = '<div class="empty">Error loading directory</div>';
+      }
+    }
+
+    function selectItem(el) {
+      document.querySelectorAll('.file-item').forEach(e => e.classList.remove('selected'));
+      el.classList.add('selected');
+      selectedItem = { name: el.dataset.name, type: el.dataset.type };
+      document.getElementById('deleteBtn').style.display = 'inline-block';
+    }
+
+    function openItem(el) {
+      const name = el.dataset.name;
+      const type = el.dataset.type;
+
+      if (type === 'directory') {
+        navigateTo(currentPath === '/' ? '/' + name : currentPath + '/' + name);
+      } else {
+        openFile(currentPath === '/' ? '/' + name : currentPath + '/' + name);
+      }
+    }
+
+    function navigateTo(path) {
+      currentPath = path;
+      closeEditor();
+      loadDirectory();
+    }
+
+    async function openFile(path) {
+      try {
+        const data = await api('read', path);
+        if (!data.success) {
+          showStatus('Error: ' + data.error, true);
+          return;
+        }
+
+        currentFile = path;
+        document.getElementById('editorTitle').textContent = path.split('/').pop();
+        document.getElementById('editorMeta').textContent =
+          'Size: ' + data.size + ' bytes | Modified: ' + new Date(data.modified).toLocaleString();
+        document.getElementById('editor').value = data.content;
+        document.getElementById('editorContainer').classList.add('active');
+      } catch (err) {
+        showStatus('Error opening file', true);
+      }
+    }
+
+    async function saveFile() {
+      if (!currentFile) return;
+
+      try {
+        const content = document.getElementById('editor').value;
+        const data = await api('write', currentFile, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content })
+        });
+
+        if (data.success) {
+          showStatus('File saved');
+          refresh();
+        } else {
+          showStatus('Error: ' + data.error, true);
+        }
+      } catch (err) {
+        showStatus('Error saving file', true);
+      }
+    }
+
+    function closeEditor() {
+      currentFile = null;
+      document.getElementById('editorContainer').classList.remove('active');
+    }
+
+    function showNewFileModal() {
+      document.getElementById('newFileModal').classList.add('active');
+      document.getElementById('newFileName').value = '';
+      document.getElementById('newFileName').focus();
+    }
+
+    function showNewFolderModal() {
+      document.getElementById('newFolderModal').classList.add('active');
+      document.getElementById('newFolderName').value = '';
+      document.getElementById('newFolderName').focus();
+    }
+
+    function closeModals() {
+      document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
+    }
+
+    async function createFile() {
+      const name = document.getElementById('newFileName').value.trim();
+      if (!name) return;
+
+      const path = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+
+      try {
+        const data = await api('write', path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: '' })
+        });
+
+        if (data.success) {
+          showStatus('File created');
+          closeModals();
+          refresh();
+        } else {
+          showStatus('Error: ' + data.error, true);
+        }
+      } catch (err) {
+        showStatus('Error creating file', true);
+      }
+    }
+
+    async function createFolder() {
+      const name = document.getElementById('newFolderName').value.trim();
+      if (!name) return;
+
+      const path = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+
+      try {
+        const data = await api('mkdir', path, { method: 'POST' });
+
+        if (data.success) {
+          showStatus('Folder created');
+          closeModals();
+          refresh();
+        } else {
+          showStatus('Error: ' + data.error, true);
+        }
+      } catch (err) {
+        showStatus('Error creating folder', true);
+      }
+    }
+
+    async function deleteSelected() {
+      if (!selectedItem) return;
+
+      const name = selectedItem.name;
+      const path = currentPath === '/' ? '/' + name : currentPath + '/' + name;
+
+      if (!confirm('Delete "' + name + '"?')) return;
+
+      try {
+        const data = await api('delete', path, { method: 'POST' });
+
+        if (data.success) {
+          showStatus('Deleted');
+          refresh();
+        } else {
+          showStatus('Error: ' + data.error, true);
+        }
+      } catch (err) {
+        showStatus('Error deleting', true);
+      }
+    }
+
+    function refresh() {
+      loadDirectory();
+    }
+
+    // Close modals on click outside
+    document.querySelectorAll('.modal-overlay').forEach(overlay => {
+      overlay.addEventListener('click', e => {
+        if (e.target === overlay) closeModals();
+      });
+    });
+
+    // Keyboard shortcuts
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') {
+        closeModals();
+        closeEditor();
+      }
+    });
+
+    // Initial load
+    loadDirectory();
+  </script>
+</body>
+</html>
+`;

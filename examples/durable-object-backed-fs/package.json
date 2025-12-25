@@ -1,0 +1,20 @@
+{
+  "name": "durable-object-backed-fs-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "types": "wrangler types",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "worker-fs-mount": "workspace:*",
+    "durable-object-fs": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "typescript": "^5.8.3",
+    "wrangler": "^4.56.0"
+  }
+}
