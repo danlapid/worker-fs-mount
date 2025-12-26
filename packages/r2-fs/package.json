@@ -32,6 +32,15 @@
   ],
   "author": "Cloudflare",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cloudflare/worker-fs-mount.git",
+    "directory": "packages/r2-fs"
+  },
+  "bugs": {
+    "url": "https://github.com/cloudflare/worker-fs-mount/issues"
+  },
+  "homepage": "https://github.com/cloudflare/worker-fs-mount/tree/main/packages/r2-fs#readme",
   "peerDependencies": {
     "worker-fs-mount": "workspace:*"
   },
