@@ -45,13 +45,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cloudflare/worker-fs-mount.git",
+    "url": "git+https://github.com/danlapid/worker-fs-mount.git",
     "directory": "packages/worker-fs-mount"
   },
   "bugs": {
-    "url": "https://github.com/cloudflare/worker-fs-mount/issues"
+    "url": "https://github.com/danlapid/worker-fs-mount/issues"
   },
-  "homepage": "https://github.com/cloudflare/worker-fs-mount/tree/main/packages/worker-fs-mount#readme",
+  "homepage": "https://github.com/danlapid/worker-fs-mount/tree/main/packages/worker-fs-mount#readme",
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251225.0",
     "@types/node": "^25.0.3",

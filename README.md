@@ -7,7 +7,7 @@ Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers.
 See it in action with an interactive filesystem explorer backed by a Durable Object:
 
 ```bash
-git clone https://github.com/cloudflare/worker-fs-mount
+git clone https://github.com/danlapid/worker-fs-mount
 cd worker-fs-mount
 pnpm install
 pnpm example

@@ -34,13 +34,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/cloudflare/worker-fs-mount.git",
+    "url": "git+https://github.com/danlapid/worker-fs-mount.git",
     "directory": "packages/durable-object-fs"
   },
   "bugs": {
-    "url": "https://github.com/cloudflare/worker-fs-mount/issues"
+    "url": "https://github.com/danlapid/worker-fs-mount/issues"
   },
-  "homepage": "https://github.com/cloudflare/worker-fs-mount/tree/main/packages/durable-object-fs#readme",
+  "homepage": "https://github.com/danlapid/worker-fs-mount/tree/main/packages/durable-object-fs#readme",
   "peerDependencies": {
     "worker-fs-mount": "workspace:*"
   },

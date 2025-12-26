@@ -58,32 +58,6 @@ export default {
 }
 ```
 
-### Alternative: Wrap in a WorkerEntrypoint
-
-For service bindings or more complex setups, you can wrap `R2Filesystem` in a WorkerEntrypoint:
-
-```typescript
-import { R2Filesystem } from 'r2-fs';
-import type { WorkerFilesystem } from 'worker-fs-mount';
-import { WorkerEntrypoint } from 'cloudflare:workers';
-
-export class MyFilesystem extends WorkerEntrypoint<Env> implements WorkerFilesystem {
-  private fs = new R2Filesystem(this.env.MY_BUCKET);
-
-  // Required methods (6)
-  stat = this.fs.stat.bind(this.fs);
-  createReadStream = this.fs.createReadStream.bind(this.fs);
-  createWriteStream = this.fs.createWriteStream.bind(this.fs);
-  readdir = this.fs.readdir.bind(this.fs);
-  mkdir = this.fs.mkdir.bind(this.fs);
-  rm = this.fs.rm.bind(this.fs);
-
-  // Optional methods (2)
-  symlink = this.fs.symlink.bind(this.fs);
-  readlink = this.fs.readlink.bind(this.fs);
-}
-```
-
 ## Features
 
 - Full `WorkerFilesystem` interface implementation
