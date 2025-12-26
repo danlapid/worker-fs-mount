@@ -35,7 +35,7 @@ function publish(dir) {
 
   console.log(`📦 Publishing ${name}@${version}...`);
   try {
-    execSync('npm publish --access public', {
+    execSync('npm publish --access public --provenance', {
       cwd: dir,
       stdio: 'inherit',
     });
