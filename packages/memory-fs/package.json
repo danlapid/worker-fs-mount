@@ -1,5 +1,6 @@
 {
   "name": "memory-fs",
+  "private": true,
   "version": "0.1.0",
   "description": "In-memory filesystem implementation for Cloudflare Workers",
   "type": "module",
@@ -9,45 +10,16 @@
       "default": "./dist/index.js"
     }
   },
-  "files": [
-    "dist",
-    "src"
-  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "clean": "rm -rf dist",
-    "prepublishOnly": "npm run clean && npm run build",
     "typecheck": "tsc --noEmit"
-  },
-  "keywords": [
-    "cloudflare",
-    "workers",
-    "memory",
-    "filesystem",
-    "storage"
-  ],
-  "author": "Cloudflare",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/danlapid/worker-fs-mount.git",
-    "directory": "packages/memory-fs"
-  },
-  "bugs": {
-    "url": "https://github.com/danlapid/worker-fs-mount/issues"
-  },
-  "homepage": "https://github.com/danlapid/worker-fs-mount/tree/main/packages/memory-fs#readme",
-  "peerDependencies": {
-    "worker-fs-mount": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20251225.0",
     "@types/node": "^25.0.3",
     "typescript": "^5.7.2",
     "worker-fs-mount": "workspace:*"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }

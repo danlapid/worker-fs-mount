@@ -36,7 +36,7 @@
     "vfs",
     "jsrpc"
   ],
-  "author": "Cloudflare",
+  "author": "danlapid",
   "license": "MIT",
   "repository": {
     "type": "git",
