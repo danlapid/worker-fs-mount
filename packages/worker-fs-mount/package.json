@@ -3,23 +3,18 @@
   "version": "0.1.1",
   "description": "Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "default": "./dist/index.js"
     },
     "./fs": {
       "types": "./dist/fs-promises.d.ts",
-      "import": "./dist/fs-promises.js",
-      "require": "./dist/fs-promises.js"
+      "default": "./dist/fs-promises.js"
     },
     "./utils": {
       "types": "./dist/utils.d.ts",
-      "import": "./dist/utils.js",
-      "require": "./dist/utils.js"
+      "default": "./dist/utils.js"
     }
   },
   "files": [

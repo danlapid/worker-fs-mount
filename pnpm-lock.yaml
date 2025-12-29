@@ -21,11 +21,11 @@ importers:
   examples/durable-object-backed-fs:
     dependencies:
       durable-object-fs:
-        specifier: workspace:*
-        version: link:../../packages/durable-object-fs
+        specifier: ^0.1.1
+        version: 0.1.1(worker-fs-mount@0.1.1)
       worker-fs-mount:
-        specifier: workspace:*
-        version: link:../../packages/worker-fs-mount
+        specifier: ^0.1.1
+        version: 0.1.1
     devDependencies:
       '@types/node':
         specifier: ^22.15.21
@@ -40,11 +40,11 @@ importers:
   examples/r2-backed-fs:
     dependencies:
       r2-fs:
-        specifier: workspace:*
-        version: link:../../packages/r2-fs
+        specifier: ^0.1.1
+        version: 0.1.1(worker-fs-mount@0.1.1)
       worker-fs-mount:
-        specifier: workspace:*
-        version: link:../../packages/worker-fs-mount
+        specifier: ^0.1.1
+        version: 0.1.1
     devDependencies:
       '@types/node':
         specifier: ^22.15.21
@@ -1059,6 +1059,12 @@ packages:
     resolution: {integrity: sha512-IrPdXQsk2BbzvCBGBOTmmSH5SodmqZNt4ERAZDmW4CT+tL8VtvinqywuANaFu4bOMWki16nqf0e4oC0QIaDr/g==}
     engines: {node: '>=10'}
 
+  durable-object-fs@0.1.1:
+    resolution: {integrity: sha512-z5AtfaOXwP20OrWqXr2tl9a5Tq3XjJnKqxxcCzIREtJsU5fc5j7oMehnWPQFpVIeV95AXUqkbKhkMEYHwarH/Q==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      worker-fs-mount: workspace:*
+
   enquirer@2.4.1:
     resolution: {integrity: sha512-rRqJg/6gd538VHvR3PSrdRBb/1Vy2YfzHqzvbhGIQpDRKIa4FgV/54b5Q1xYSxOOwKvjXweS26E0Q+nAMwp2pQ==}
     engines: {node: '>=8.6'}
@@ -1335,6 +1341,12 @@ packages:
   queue-microtask@1.2.3:
     resolution: {integrity: sha512-NuaNSa6flKT5JaSYQzJok04JzTL1CA6aGhv5rfLW3PgqA+M2ChpZQnAC8h8i4ZFkBS8X5RqkDBHA7r4hej3K9A==}
 
+  r2-fs@0.1.1:
+    resolution: {integrity: sha512-5lsKaIOsyBWq+RRoJj7AoUGPOWO25yZq/+EtK+AJASYtKt4v1DwO3XifbMsIW2kcxX/xjhM2OIpnVPROVQGiow==}
+    engines: {node: '>=18.0.0'}
+    peerDependencies:
+      worker-fs-mount: workspace:*
+
   read-yaml-file@1.1.0:
     resolution: {integrity: sha512-VIMnQi/Z4HT2Fxuwg5KrY174U1VdUIASQVWXXyqtNRtxSr9IYkn1rsI6Tb6HsrHCmB7gVpNwX6JxPTHcH6IoTA==}
     engines: {node: '>=6'}
@@ -1570,6 +1582,10 @@ packages:
     resolution: {integrity: sha512-hUrmaWBdVDcxvYqnyh09zunKzROWjbZTiNy8dBEjkS7ehEDQibXJ7XvlmtbwuTclUiIyN+CyXQD4Vmko8fNm8w==}
     engines: {node: '>=8'}
     hasBin: true
+
+  worker-fs-mount@0.1.1:
+    resolution: {integrity: sha512-dKBARLbcABLHElYa2ji2orwSvjudwP+SA4bqxS1/SShWXGF63OHEJRgsMEY+fx/G+f47JKaEg6fwtx0EQXAT3g==}
+    engines: {node: '>=18.0.0'}
 
   workerd@1.20251217.0:
     resolution: {integrity: sha512-s3mHDSWwHTduyY8kpHOsl27ZJ4ziDBJlc18PfBvNMqNnhO7yBeemlxH7bo7yQyU1foJrIZ6IENHDDg0Z9N8zQA==}
@@ -2346,6 +2362,10 @@ snapshots:
 
   dotenv@8.6.0: {}
 
+  durable-object-fs@0.1.1(worker-fs-mount@0.1.1):
+    dependencies:
+      worker-fs-mount: 0.1.1
+
   enquirer@2.4.1:
     dependencies:
       ansi-colors: 4.1.3
@@ -2628,6 +2648,10 @@ snapshots:
 
   queue-microtask@1.2.3: {}
 
+  r2-fs@0.1.1(worker-fs-mount@0.1.1):
+    dependencies:
+      worker-fs-mount: 0.1.1
+
   read-yaml-file@1.1.0:
     dependencies:
       graceful-fs: 4.2.11
@@ -2873,6 +2897,8 @@ snapshots:
     dependencies:
       siginfo: 2.0.0
       stackback: 0.0.2
+
+  worker-fs-mount@0.1.1: {}
 
   workerd@1.20251217.0:
     optionalDependencies:

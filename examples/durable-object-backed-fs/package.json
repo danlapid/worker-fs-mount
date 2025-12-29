@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "worker-fs-mount": "workspace:*",
-    "durable-object-fs": "workspace:*"
+    "worker-fs-mount": "^0.1.1",
+    "durable-object-fs": "^0.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",
