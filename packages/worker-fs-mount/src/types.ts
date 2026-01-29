@@ -18,7 +18,7 @@ export interface DirEntry {
 }
 
 /**
- * Stream-first filesystem interface that WorkerEntrypoints must implement.
+ * Stream-first async filesystem interface that WorkerEntrypoints must implement.
  *
  * This is a minimal core interface - operations like readFile, writeFile,
  * truncate, cp, access, and rename are automatically derived from these
@@ -99,4 +99,119 @@ export interface WorkerFilesystem {
    * @returns The target path
    */
   readlink?(path: string): Promise<string>;
+}
+
+/**
+ * Synchronous filesystem interface for local operations.
+ *
+ * Unlike WorkerFilesystem, these methods are synchronous and do not use streams.
+ * This interface is suitable for filesystems that can perform I/O synchronously,
+ * such as Durable Object SQLite storage (ctx.storage.sql).
+ */
+export interface SyncWorkerFilesystem {
+  // === Metadata Operations ===
+
+  /**
+   * Get file/directory metadata synchronously.
+   * @param path - Path relative to mount point
+   * @param options - Options for the operation
+   * @returns Stat object or null if not found
+   */
+  statSync(path: string, options?: { followSymlinks?: boolean }): Stat | null;
+
+  // === File Operations ===
+
+  /**
+   * Read a file's contents synchronously.
+   * @param path - Path relative to mount point
+   * @returns The file contents as Uint8Array
+   * @throws Error with code ENOENT if file not found
+   * @throws Error with code EISDIR if path is a directory
+   */
+  readFileSync(path: string): Uint8Array;
+
+  /**
+   * Write data to a file synchronously.
+   * @param path - Path relative to mount point
+   * @param data - The data to write
+   * @param options - Write options (flags for write mode)
+   * @throws Error with code ENOENT if parent directory not found
+   * @throws Error with code EISDIR if path is a directory
+   */
+  writeFileSync(path: string, data: Uint8Array, options?: { flags?: 'w' | 'a' | 'r+' }): void;
+
+  // === Directory Operations ===
+
+  /**
+   * Read directory contents synchronously.
+   * @param path - Path relative to mount point
+   * @param options - Readdir options
+   * @returns Array of directory entries
+   * @throws Error with code ENOENT if directory not found
+   * @throws Error with code ENOTDIR if path is not a directory
+   */
+  readdirSync(path: string, options?: { recursive?: boolean }): DirEntry[];
+
+  /**
+   * Create a directory synchronously.
+   * @param path - Path relative to mount point
+   * @param options - Mkdir options
+   * @returns The path of the first created directory, or undefined
+   * @throws Error with code EEXIST if path exists (unless recursive)
+   * @throws Error with code ENOENT if parent not found (unless recursive)
+   */
+  mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined;
+
+  /**
+   * Remove a file or directory synchronously.
+   * @param path - Path relative to mount point
+   * @param options - Remove options
+   * @throws Error with code ENOENT if not found (unless force)
+   * @throws Error with code ENOTEMPTY if directory not empty (unless recursive)
+   */
+  rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void;
+
+  // === Link Operations (Optional) ===
+
+  /**
+   * Create a symbolic link synchronously.
+   * @param linkPath - Path for the new symlink
+   * @param targetPath - Path the symlink points to
+   * @throws Error with code EEXIST if link already exists
+   * @throws Error with code ENOENT if parent directory not found
+   */
+  symlinkSync?(linkPath: string, targetPath: string): void;
+
+  /**
+   * Read the target of a symbolic link synchronously.
+   * @param path - Path relative to mount point
+   * @returns The target path
+   * @throws Error with code ENOENT if symlink not found
+   * @throws Error with code EINVAL if not a symlink
+   */
+  readlinkSync?(path: string): string;
+}
+
+/**
+ * A mounted filesystem can implement either async, sync, or both interfaces.
+ * The mount() function accepts any object that implements at least one of these.
+ */
+export type MountableFilesystem = WorkerFilesystem | SyncWorkerFilesystem | (WorkerFilesystem & SyncWorkerFilesystem);
+
+/**
+ * Type guard to check if a filesystem has async methods.
+ */
+export function hasAsyncMethods(fs: MountableFilesystem): fs is WorkerFilesystem {
+  return typeof (fs as WorkerFilesystem).stat === 'function' &&
+    typeof (fs as WorkerFilesystem).createReadStream === 'function' &&
+    typeof (fs as WorkerFilesystem).createWriteStream === 'function';
+}
+
+/**
+ * Type guard to check if a filesystem has sync methods.
+ */
+export function hasSyncMethods(fs: MountableFilesystem): fs is SyncWorkerFilesystem {
+  return typeof (fs as SyncWorkerFilesystem).statSync === 'function' &&
+    typeof (fs as SyncWorkerFilesystem).readFileSync === 'function' &&
+    typeof (fs as SyncWorkerFilesystem).writeFileSync === 'function';
 }

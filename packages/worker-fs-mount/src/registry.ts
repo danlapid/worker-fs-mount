@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { WorkerFilesystem } from './types.js';
+import type { MountableFilesystem, SyncWorkerFilesystem, WorkerFilesystem } from './types.js';
+import { hasAsyncMethods, hasSyncMethods } from './types.js';
 import { normalizePath } from './utils.js';
 
 /**
@@ -7,7 +8,7 @@ import { normalizePath } from './utils.js';
  */
 interface Mount {
   path: string;
-  stub: WorkerFilesystem;
+  fs: MountableFilesystem;
 }
 
 /**
@@ -91,30 +92,40 @@ export function withMounts<T>(fn: () => T): T {
 }
 
 /**
- * Mount a WorkerFilesystem at the specified path.
+ * Mount a filesystem at the specified path.
+ *
+ * The filesystem can implement either the async WorkerFilesystem interface,
+ * the sync SyncWorkerFilesystem interface, or both. The appropriate methods
+ * will be used depending on how the filesystem is accessed (via node:fs/promises
+ * or node:fs sync methods).
  *
  * When called within withMounts(), the mount is scoped to that context.
  * When called outside withMounts(), uses a global registry (for backwards compatibility).
  *
  * @param path - The mount point (must be absolute, starting with /)
- * @param stub - The WorkerFilesystem implementation to mount
+ * @param fs - The filesystem implementation to mount (async, sync, or both)
  *
  * @example
  * ```typescript
  * import { withMounts, mount } from 'worker-fs-mount';
  *
- * // Recommended: use withMounts for request isolation
- * withMounts(() => {
- *   mount('/mnt/storage', env.STORAGE_SERVICE);
- *   // ... use fs operations ...
- * });
+ * // Async filesystem (service binding, DO stub via jsrpc)
+ * mount('/mnt/storage', env.STORAGE_SERVICE);
+ *
+ * // Sync filesystem (local DO storage)
+ * mount('/data', new LocalDOFilesystem(ctx.storage.sql));
  * ```
  */
-export function mount(path: string, stub: WorkerFilesystem): void {
+export function mount(path: string, fs: MountableFilesystem): void {
   const mounts = getMountRegistry();
   const normalized = normalizePath(path);
 
   validateMountPath(normalized);
+
+  // Validate that the filesystem implements at least one interface
+  if (!hasAsyncMethods(fs) && !hasSyncMethods(fs)) {
+    throw new Error('Filesystem must implement either WorkerFilesystem or SyncWorkerFilesystem interface');
+  }
 
   if (mounts.has(normalized)) {
     throw new Error(`Path already mounted: ${normalized}`);
@@ -130,7 +141,7 @@ export function mount(path: string, stub: WorkerFilesystem): void {
     }
   }
 
-  mounts.set(normalized, { path: normalized, stub });
+  mounts.set(normalized, { path: normalized, fs });
 }
 
 /**
@@ -176,6 +187,28 @@ export function findMount(path: string): MountMatch | null {
     }
   }
 
+  return null;
+}
+
+/**
+ * Get the async filesystem from a mount match.
+ * Returns the filesystem if it has async methods, null otherwise.
+ */
+export function getAsyncFs(match: MountMatch): WorkerFilesystem | null {
+  if (hasAsyncMethods(match.mount.fs)) {
+    return match.mount.fs;
+  }
+  return null;
+}
+
+/**
+ * Get the sync filesystem from a mount match.
+ * Returns the filesystem if it has sync methods, null otherwise.
+ */
+export function getSyncFs(match: MountMatch): SyncWorkerFilesystem | null {
+  if (hasSyncMethods(match.mount.fs)) {
+    return match.mount.fs;
+  }
   return null;
 }
 

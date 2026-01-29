@@ -23,9 +23,10 @@ Add the following alias to your `wrangler.toml`:
 ```toml
 [alias]
 "node:fs/promises" = "worker-fs-mount/fs"
+"node:fs" = "worker-fs-mount/fs-sync"
 ```
 
-This replaces `node:fs/promises` imports with our mount-aware implementation at build time.
+This replaces `node:fs/promises` and `node:fs` imports with our mount-aware implementations at build time. The `node:fs` alias is optional - only needed if you use synchronous fs methods.
 
 ## Quick Start
 
@@ -309,11 +310,109 @@ The following `node:fs/promises` methods are intercepted:
 - `realpath`
 - `utimes`
 
+## Synchronous Filesystem (Durable Objects)
+
+When running inside a Durable Object, you can use synchronous filesystem operations by mounting a `LocalDOFilesystem`. This works because DO's `ctx.storage.sql` is synchronous within the DO context.
+
+### Setup
+
+First, add the `node:fs` alias to your `wrangler.toml`:
+
+```toml
+[alias]
+"node:fs/promises" = "worker-fs-mount/fs"
+"node:fs" = "worker-fs-mount/fs-sync"
+```
+
+Then use `LocalDOFilesystem` inside your Durable Object:
+
+```typescript
+import { DurableObject } from 'cloudflare:workers';
+import { mount } from 'worker-fs-mount';
+import { LocalDOFilesystem } from 'durable-object-fs';
+import fs from 'node:fs';  // Aliased to worker-fs-mount/fs-sync
+
+export class MyDO extends DurableObject {
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    // Create and mount once in constructor - DOs are single-threaded
+    const localFs = new LocalDOFilesystem(ctx.storage.sql);
+    mount('/data', localFs);
+  }
+
+  fetch(request: Request): Response {
+    // Synchronous fs operations work!
+    const configExists = fs.existsSync('/data/config.json');
+
+    if (!configExists) {
+      fs.mkdirSync('/data', { recursive: true });
+      fs.writeFileSync('/data/config.json', JSON.stringify({ initialized: true }));
+    }
+
+    const config = fs.readFileSync('/data/config.json', 'utf8');
+    fs.writeFileSync('/data/output.txt', 'processed');
+
+    const entries = fs.readdirSync('/data');
+
+    return Response.json({ config: JSON.parse(config), entries });
+  }
+}
+```
+
+### Unified Mount API
+
+The `mount()` function accepts both async (`WorkerFilesystem`) and sync (`SyncWorkerFilesystem`) filesystems:
+
+```typescript
+// Async filesystem (WorkerEntrypoint via jsrpc)
+mount('/mnt/remote', env.STORAGE_SERVICE);
+
+// Sync filesystem (LocalDOFilesystem inside DO)
+mount('/data', new LocalDOFilesystem(ctx.storage.sql));
+```
+
+When using async `fs.promises` methods with a sync-only mount, they automatically fall back to the sync methods:
+
+```typescript
+import fs from 'node:fs/promises';
+
+// Even with sync-only LocalDOFilesystem, async methods work
+await fs.readFile('/data/file.txt');  // Falls back to readFileSync internally
+```
+
+### SyncWorkerFilesystem Interface
+
+To create a sync filesystem, implement `SyncWorkerFilesystem`:
+
+```typescript
+import type { SyncWorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
+
+class MySyncFs implements SyncWorkerFilesystem {
+  statSync(path: string, options?: { followSymlinks?: boolean }): Stat | null { /* ... */ }
+  readFileSync(path: string): Uint8Array { /* ... */ }
+  writeFileSync(path: string, data: Uint8Array, options?: { flags?: 'w' | 'a' | 'r+' }): void { /* ... */ }
+  readdirSync(path: string, options?: { recursive?: boolean }): DirEntry[] { /* ... */ }
+  mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined { /* ... */ }
+  rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void { /* ... */ }
+  // Optional:
+  symlinkSync?(linkPath: string, targetPath: string): void;
+  readlinkSync?(path: string): string;
+}
+```
+
+### Important Notes
+
+- **DO Context Only**: `LocalDOFilesystem` only works inside a Durable Object where `ctx.storage.sql` is available
+- **Not a WorkerEntrypoint**: `LocalDOFilesystem` operates directly on SQLite storage - it's not accessible via jsrpc
+- **No `withMounts` needed**: DOs are single-threaded, so mount once in the constructor - no request isolation required
+- **Use wrangler alias**: Import `node:fs` with the alias configured for best developer experience
+- **Strong Consistency**: DO serialization ensures single-threaded execution with no conflicts
+
 ## Constraints
 
-### Async Only
+### Sync Operations Require Sync Filesystem
 
-Only `node:fs/promises` is supported. Synchronous operations (`readFileSync`, etc.) are not intercepted and will use the native filesystem.
+Synchronous `node:fs` methods only work with filesystems that implement `SyncWorkerFilesystem` (like `LocalDOFilesystem`). Using sync methods on async-only mounts throws `ENOSYS`.
 
 ### No File Descriptors
 
