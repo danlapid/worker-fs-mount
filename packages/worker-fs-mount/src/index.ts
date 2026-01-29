@@ -10,6 +10,7 @@
  * ```toml
  * [alias]
  * "node:fs/promises" = "worker-fs-mount/fs"
+ * "node:fs" = "worker-fs-mount/fs-sync"
  * ```
  *
  * ## Usage
@@ -37,14 +38,8 @@
  * @packageDocumentation
  */
 
-// Export public API
-export {
-  isInMountContext,
-  isMounted,
-  mount,
-  unmount,
-  withMounts,
-} from './registry.js';
+// Export mount API (keep minimal public surface)
+export { isInMountContext, isMounted, mount, unmount, withMounts } from './registry.js';
 
-// Export types
-export type { DirEntry, Stat, WorkerFilesystem } from './types.js';
+// Export types needed for implementing filesystems
+export type { DirEntry, Stat, SyncWorkerFilesystem, WorkerFilesystem } from './types.js';
