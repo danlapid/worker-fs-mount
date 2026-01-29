@@ -12,6 +12,10 @@
       "types": "./dist/fs-promises.d.ts",
       "default": "./dist/fs-promises.js"
     },
+    "./fs-sync": {
+      "types": "./dist/fs-sync.d.ts",
+      "default": "./dist/fs-sync.js"
+    },
     "./utils": {
       "types": "./dist/utils.d.ts",
       "default": "./dist/utils.js"

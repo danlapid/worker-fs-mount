@@ -13,10 +13,11 @@
 
 import { Buffer } from 'node:buffer';
 import type { BigIntStats, Dirent, Stats } from 'node:fs';
-// Import the SYNC fs module and use .promises to avoid alias loop
-import * as nodeFs from 'node:fs';
-import { findMount } from './registry.js';
-import type { DirEntry, Stat, WorkerFilesystem } from './types.js';
+// IMPORTANT: Use 'fs' not 'node:fs' to avoid wrangler alias loop
+// Wrangler aliases are exact string matches, so 'fs' won't be caught
+import * as nodeFs from 'fs';
+import { findMount, getAsyncFs, getSyncFs } from './registry.js';
+import type { DirEntry, Stat, SyncWorkerFilesystem, WorkerFilesystem } from './types.js';
 
 // Get the real fs/promises from the sync module
 const realFs = nodeFs.promises;
@@ -178,30 +179,61 @@ async function pipeStreams(
  * Recursively copy a directory using streaming.
  */
 async function copyDirectoryRecursive(
-  srcStub: WorkerFilesystem,
+  srcFs: WorkerFilesystem,
   srcPath: string,
-  destStub: WorkerFilesystem,
+  destFs: WorkerFilesystem,
   destPath: string
 ): Promise<void> {
   // Create destination directory
-  await destStub.mkdir(destPath, { recursive: true });
+  await destFs.mkdir(destPath, { recursive: true });
 
   // List source directory
-  const entries = await srcStub.readdir(srcPath);
+  const entries = await srcFs.readdir(srcPath);
 
   for (const entry of entries) {
     const srcChildPath = srcPath === '/' ? `/${entry.name}` : `${srcPath}/${entry.name}`;
     const destChildPath = destPath === '/' ? `/${entry.name}` : `${destPath}/${entry.name}`;
 
     if (entry.type === 'directory') {
-      await copyDirectoryRecursive(srcStub, srcChildPath, destStub, destChildPath);
+      await copyDirectoryRecursive(srcFs, srcChildPath, destFs, destChildPath);
     } else if (entry.type === 'file') {
-      const readStream = await srcStub.createReadStream(srcChildPath);
-      const writeStream = await destStub.createWriteStream(destChildPath);
+      const readStream = await srcFs.createReadStream(srcChildPath);
+      const writeStream = await destFs.createWriteStream(destChildPath);
       await pipeStreams(readStream, writeStream);
-    } else if (entry.type === 'symlink' && srcStub.readlink && destStub.symlink) {
-      const target = await srcStub.readlink(srcChildPath);
-      await destStub.symlink(destChildPath, target);
+    } else if (entry.type === 'symlink' && srcFs.readlink && destFs.symlink) {
+      const target = await srcFs.readlink(srcChildPath);
+      await destFs.symlink(destChildPath, target);
+    }
+  }
+}
+
+/**
+ * Recursively copy a directory using sync filesystem.
+ */
+function copyDirectorySyncRecursive(
+  srcFs: SyncWorkerFilesystem,
+  srcPath: string,
+  destFs: SyncWorkerFilesystem,
+  destPath: string
+): void {
+  // Create destination directory
+  destFs.mkdirSync(destPath, { recursive: true });
+
+  // List source directory
+  const entries = srcFs.readdirSync(srcPath);
+
+  for (const entry of entries) {
+    const srcChildPath = srcPath === '/' ? `/${entry.name}` : `${srcPath}/${entry.name}`;
+    const destChildPath = destPath === '/' ? `/${entry.name}` : `${destPath}/${entry.name}`;
+
+    if (entry.type === 'directory') {
+      copyDirectorySyncRecursive(srcFs, srcChildPath, destFs, destChildPath);
+    } else if (entry.type === 'file') {
+      const data = srcFs.readFileSync(srcChildPath);
+      destFs.writeFileSync(destChildPath, data);
+    } else if (entry.type === 'symlink' && srcFs.readlinkSync && destFs.symlinkSync) {
+      const target = srcFs.readlinkSync(srcChildPath);
+      destFs.symlinkSync(destChildPath, target);
     }
   }
 }
@@ -216,9 +248,22 @@ export async function readFile(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      // Use streaming to read file
-      const stream = await match.mount.stub.createReadStream(match.relativePath);
-      const data = await collectStream(stream);
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      let data: Uint8Array;
+
+      if (asyncFs) {
+        // Use streaming to read file
+        const stream = await asyncFs.createReadStream(match.relativePath);
+        data = await collectStream(stream);
+      } else if (syncFs) {
+        // Fall back to sync method
+        data = syncFs.readFileSync(match.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'readFile', pathStr, 'Filesystem does not support reading');
+      }
+
       const buffer = Buffer.from(data);
 
       const encoding =
@@ -277,19 +322,38 @@ export async function writeFile(
       const isAppend = flag === 'a' || flag === 'a+';
       const isExclusive = flag === 'wx' || flag === 'xw';
 
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
       // Check exclusive flag
       if (isExclusive) {
-        const existing = await match.mount.stub.stat(match.relativePath);
+        let existing: Stat | null;
+        if (asyncFs) {
+          existing = await asyncFs.stat(match.relativePath);
+        } else if (syncFs) {
+          existing = syncFs.statSync(match.relativePath);
+        } else {
+          throw createFsError('ENOSYS', 'writeFile', pathStr, 'Filesystem does not support stat');
+        }
         if (existing) {
           throw createFsError('EEXIST', 'writeFile', pathStr);
         }
       }
 
-      // Use streaming to write file
-      const stream = await match.mount.stub.createWriteStream(match.relativePath, {
-        flags: isAppend ? 'a' : 'w',
-      });
-      await writeToStream(stream, bytes);
+      if (asyncFs) {
+        // Use streaming to write file
+        const stream = await asyncFs.createWriteStream(match.relativePath, {
+          flags: isAppend ? 'a' : 'w',
+        });
+        await writeToStream(stream, bytes);
+      } else if (syncFs) {
+        // Fall back to sync method
+        syncFs.writeFileSync(match.relativePath, bytes, {
+          flags: isAppend ? 'a' : 'w',
+        });
+      } else {
+        throw createFsError('ENOSYS', 'writeFile', pathStr, 'Filesystem does not support writing');
+      }
       return;
     }
   }
@@ -312,11 +376,21 @@ export async function appendFile(
         bytes = new Uint8Array(data);
       }
 
-      // Use streaming with append flag
-      const stream = await match.mount.stub.createWriteStream(match.relativePath, {
-        flags: 'a',
-      });
-      await writeToStream(stream, bytes);
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      if (asyncFs) {
+        // Use streaming with append flag
+        const stream = await asyncFs.createWriteStream(match.relativePath, {
+          flags: 'a',
+        });
+        await writeToStream(stream, bytes);
+      } else if (syncFs) {
+        // Fall back to sync method
+        syncFs.writeFileSync(match.relativePath, bytes, { flags: 'a' });
+      } else {
+        throw createFsError('ENOSYS', 'appendFile', pathStr, 'Filesystem does not support writing');
+      }
       return;
     }
   }
@@ -331,7 +405,18 @@ export async function stat(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      const s = await match.mount.stub.stat(match.relativePath, { followSymlinks: true });
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      let s: Stat | null;
+      if (asyncFs) {
+        s = await asyncFs.stat(match.relativePath, { followSymlinks: true });
+      } else if (syncFs) {
+        s = syncFs.statSync(match.relativePath, { followSymlinks: true });
+      } else {
+        throw createFsError('ENOSYS', 'stat', pathStr, 'Filesystem does not support stat');
+      }
+
       if (!s) {
         throw createFsError('ENOENT', 'stat', pathStr);
       }
@@ -349,7 +434,18 @@ export async function lstat(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      const s = await match.mount.stub.stat(match.relativePath, { followSymlinks: false });
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      let s: Stat | null;
+      if (asyncFs) {
+        s = await asyncFs.stat(match.relativePath, { followSymlinks: false });
+      } else if (syncFs) {
+        s = syncFs.statSync(match.relativePath, { followSymlinks: false });
+      } else {
+        throw createFsError('ENOSYS', 'lstat', pathStr, 'Filesystem does not support stat');
+      }
+
       if (!s) {
         throw createFsError('ENOENT', 'lstat', pathStr);
       }
@@ -369,7 +465,18 @@ export async function readdir(
     if (match) {
       const opts = typeof options === 'object' && options !== null ? options : {};
       const recursive = 'recursive' in opts ? opts.recursive === true : false;
-      const entries = await match.mount.stub.readdir(match.relativePath, { recursive });
+
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      let entries: DirEntry[];
+      if (asyncFs) {
+        entries = await asyncFs.readdir(match.relativePath, { recursive });
+      } else if (syncFs) {
+        entries = syncFs.readdirSync(match.relativePath, { recursive });
+      } else {
+        throw createFsError('ENOSYS', 'readdir', pathStr, 'Filesystem does not support readdir');
+      }
 
       const withFileTypes = 'withFileTypes' in opts ? opts.withFileTypes === true : false;
 
@@ -405,7 +512,17 @@ export async function mkdir(
     if (match) {
       const recursive =
         typeof options === 'object' && options !== null && options.recursive === true;
-      return match.mount.stub.mkdir(match.relativePath, { recursive });
+
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      if (asyncFs) {
+        return asyncFs.mkdir(match.relativePath, { recursive });
+      } else if (syncFs) {
+        return syncFs.mkdirSync(match.relativePath, { recursive });
+      } else {
+        throw createFsError('ENOSYS', 'mkdir', pathStr, 'Filesystem does not support mkdir');
+      }
     }
   }
   return realFs.mkdir(path, options) as Promise<string | undefined>;
@@ -421,7 +538,17 @@ export async function rm(
     if (match) {
       const recursive = options?.recursive === true;
       const force = options?.force === true;
-      return match.mount.stub.rm(match.relativePath, { recursive, force });
+
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      if (asyncFs) {
+        return asyncFs.rm(match.relativePath, { recursive, force });
+      } else if (syncFs) {
+        return syncFs.rmSync(match.relativePath, { recursive, force });
+      } else {
+        throw createFsError('ENOSYS', 'rm', pathStr, 'Filesystem does not support rm');
+      }
     }
   }
   return realFs.rm(path, options);
@@ -435,7 +562,16 @@ export async function rmdir(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      return match.mount.stub.rm(match.relativePath, { recursive: false, force: false });
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      if (asyncFs) {
+        return asyncFs.rm(match.relativePath, { recursive: false, force: false });
+      } else if (syncFs) {
+        return syncFs.rmSync(match.relativePath, { recursive: false, force: false });
+      } else {
+        throw createFsError('ENOSYS', 'rmdir', pathStr, 'Filesystem does not support rm');
+      }
     }
   }
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -447,15 +583,31 @@ export async function unlink(path: Parameters<typeof realFs.unlink>[0]): Promise
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
       // Derive unlink from stat + rm
-      const s = await match.mount.stub.stat(match.relativePath);
+      let s: Stat | null;
+      if (asyncFs) {
+        s = await asyncFs.stat(match.relativePath);
+      } else if (syncFs) {
+        s = syncFs.statSync(match.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'unlink', pathStr, 'Filesystem does not support stat');
+      }
+
       if (!s) {
         throw createFsError('ENOENT', 'unlink', pathStr);
       }
       if (s.type === 'directory') {
         throw createFsError('EISDIR', 'unlink', pathStr);
       }
-      return match.mount.stub.rm(match.relativePath);
+
+      if (asyncFs) {
+        return asyncFs.rm(match.relativePath);
+      } else if (syncFs) {
+        return syncFs.rmSync(match.relativePath);
+      }
     }
   }
   return realFs.unlink(path);
@@ -478,35 +630,73 @@ export async function rename(
     }
 
     if (oldMatch && newMatch) {
-      // Derive rename as copy + delete
-      const srcStat = await oldMatch.mount.stub.stat(oldMatch.relativePath);
+      const asyncFs = getAsyncFs(oldMatch);
+      const syncFs = getSyncFs(oldMatch);
+
+      // Get source stat
+      let srcStat: Stat | null;
+      if (asyncFs) {
+        srcStat = await asyncFs.stat(oldMatch.relativePath);
+      } else if (syncFs) {
+        srcStat = syncFs.statSync(oldMatch.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'rename', oldPathStr, 'Filesystem does not support stat');
+      }
+
       if (!srcStat) {
         throw createFsError('ENOENT', 'rename', oldPathStr);
       }
 
-      if (srcStat.type === 'directory') {
-        // Recursive directory copy + delete
-        await copyDirectoryRecursive(
-          oldMatch.mount.stub,
-          oldMatch.relativePath,
-          newMatch.mount.stub,
-          newMatch.relativePath
-        );
-        await oldMatch.mount.stub.rm(oldMatch.relativePath, { recursive: true });
-      } else if (srcStat.type === 'file') {
-        // Stream copy + delete
-        const readStream = await oldMatch.mount.stub.createReadStream(oldMatch.relativePath);
-        const writeStream = await newMatch.mount.stub.createWriteStream(newMatch.relativePath);
-        await pipeStreams(readStream, writeStream);
-        await oldMatch.mount.stub.rm(oldMatch.relativePath);
-      } else if (srcStat.type === 'symlink') {
-        // Copy symlink + delete
-        if (oldMatch.mount.stub.readlink && newMatch.mount.stub.symlink) {
-          const target = await oldMatch.mount.stub.readlink(oldMatch.relativePath);
-          await newMatch.mount.stub.symlink(newMatch.relativePath, target);
-          await oldMatch.mount.stub.rm(oldMatch.relativePath);
-        } else {
-          throw createFsError('ENOSYS', 'rename', oldPathStr, 'symlink operations not supported');
+      if (asyncFs) {
+        if (srcStat.type === 'directory') {
+          // Recursive directory copy + delete
+          await copyDirectoryRecursive(
+            asyncFs,
+            oldMatch.relativePath,
+            asyncFs,
+            newMatch.relativePath
+          );
+          await asyncFs.rm(oldMatch.relativePath, { recursive: true });
+        } else if (srcStat.type === 'file') {
+          // Stream copy + delete
+          const readStream = await asyncFs.createReadStream(oldMatch.relativePath);
+          const writeStream = await asyncFs.createWriteStream(newMatch.relativePath);
+          await pipeStreams(readStream, writeStream);
+          await asyncFs.rm(oldMatch.relativePath);
+        } else if (srcStat.type === 'symlink') {
+          // Copy symlink + delete
+          if (asyncFs.readlink && asyncFs.symlink) {
+            const target = await asyncFs.readlink(oldMatch.relativePath);
+            await asyncFs.symlink(newMatch.relativePath, target);
+            await asyncFs.rm(oldMatch.relativePath);
+          } else {
+            throw createFsError('ENOSYS', 'rename', oldPathStr, 'symlink operations not supported');
+          }
+        }
+      } else if (syncFs) {
+        if (srcStat.type === 'directory') {
+          // Recursive directory copy + delete (sync)
+          copyDirectorySyncRecursive(
+            syncFs,
+            oldMatch.relativePath,
+            syncFs,
+            newMatch.relativePath
+          );
+          syncFs.rmSync(oldMatch.relativePath, { recursive: true });
+        } else if (srcStat.type === 'file') {
+          // Read + write + delete (sync)
+          const data = syncFs.readFileSync(oldMatch.relativePath);
+          syncFs.writeFileSync(newMatch.relativePath, data);
+          syncFs.rmSync(oldMatch.relativePath);
+        } else if (srcStat.type === 'symlink') {
+          // Copy symlink + delete
+          if (syncFs.readlinkSync && syncFs.symlinkSync) {
+            const target = syncFs.readlinkSync(oldMatch.relativePath);
+            syncFs.symlinkSync(newMatch.relativePath, target);
+            syncFs.rmSync(oldMatch.relativePath);
+          } else {
+            throw createFsError('ENOSYS', 'rename', oldPathStr, 'symlink operations not supported');
+          }
         }
       }
       return;
@@ -529,22 +719,66 @@ export async function copyFile(
     const destMatch = findMount(destStr);
 
     if (srcMatch || destMatch) {
-      // Use streaming for copy
+      // Use streaming/sync for copy
       if (srcMatch && destMatch) {
-        // Both on mounts - pipe streams
-        const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
-        const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
-        await pipeStreams(readStream, writeStream);
+        const srcAsyncFs = getAsyncFs(srcMatch);
+        const destAsyncFs = getAsyncFs(destMatch);
+        const srcSyncFs = getSyncFs(srcMatch);
+        const destSyncFs = getSyncFs(destMatch);
+
+        if (srcAsyncFs && destAsyncFs) {
+          // Both have async - pipe streams
+          const readStream = await srcAsyncFs.createReadStream(srcMatch.relativePath);
+          const writeStream = await destAsyncFs.createWriteStream(destMatch.relativePath);
+          await pipeStreams(readStream, writeStream);
+        } else if (srcSyncFs && destSyncFs) {
+          // Both have sync - read and write
+          const data = srcSyncFs.readFileSync(srcMatch.relativePath);
+          destSyncFs.writeFileSync(destMatch.relativePath, data);
+        } else if (srcAsyncFs && destSyncFs) {
+          // Mixed: async read, sync write
+          const stream = await srcAsyncFs.createReadStream(srcMatch.relativePath);
+          const data = await collectStream(stream);
+          destSyncFs.writeFileSync(destMatch.relativePath, data);
+        } else if (srcSyncFs && destAsyncFs) {
+          // Mixed: sync read, async write
+          const data = srcSyncFs.readFileSync(srcMatch.relativePath);
+          const stream = await destAsyncFs.createWriteStream(destMatch.relativePath);
+          await writeToStream(stream, data);
+        } else {
+          throw createFsError('ENOSYS', 'copyFile', srcStr, 'Filesystem does not support copy operations');
+        }
       } else if (srcMatch) {
         // Source on mount, dest on real fs
-        const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
-        const data = await collectStream(readStream);
-        await realFs.writeFile(dest, data);
+        const srcAsyncFs = getAsyncFs(srcMatch);
+        const srcSyncFs = getSyncFs(srcMatch);
+
+        if (srcAsyncFs) {
+          const readStream = await srcAsyncFs.createReadStream(srcMatch.relativePath);
+          const data = await collectStream(readStream);
+          await realFs.writeFile(dest, data);
+        } else if (srcSyncFs) {
+          const data = srcSyncFs.readFileSync(srcMatch.relativePath);
+          await realFs.writeFile(dest, data);
+        } else {
+          throw createFsError('ENOSYS', 'copyFile', srcStr, 'Filesystem does not support reading');
+        }
       } else if (destMatch) {
         // Source on real fs, dest on mount
+        const destAsyncFs = getAsyncFs(destMatch);
+        const destSyncFs = getSyncFs(destMatch);
+
         const buffer = await realFs.readFile(src);
-        const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
-        await writeToStream(writeStream, new Uint8Array(buffer));
+        const data = new Uint8Array(buffer);
+
+        if (destAsyncFs) {
+          const writeStream = await destAsyncFs.createWriteStream(destMatch.relativePath);
+          await writeToStream(writeStream, data);
+        } else if (destSyncFs) {
+          destSyncFs.writeFileSync(destMatch.relativePath, data);
+        } else {
+          throw createFsError('ENOSYS', 'copyFile', destStr, 'Filesystem does not support writing');
+        }
       }
       return;
     }
@@ -567,11 +801,20 @@ export async function cp(
 
     if (srcMatch || destMatch) {
       // Check if source is a directory
-      let srcStat: Stat | null | undefined;
       let isDirectory = false;
 
       if (srcMatch) {
-        srcStat = await srcMatch.mount.stub.stat(srcMatch.relativePath);
+        const srcAsyncFs = getAsyncFs(srcMatch);
+        const srcSyncFs = getSyncFs(srcMatch);
+
+        let srcStat: Stat | null;
+        if (srcAsyncFs) {
+          srcStat = await srcAsyncFs.stat(srcMatch.relativePath);
+        } else if (srcSyncFs) {
+          srcStat = srcSyncFs.statSync(srcMatch.relativePath);
+        } else {
+          throw createFsError('ENOSYS', 'cp', srcStr, 'Filesystem does not support stat');
+        }
         isDirectory = srcStat?.type === 'directory';
       } else {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -585,12 +828,33 @@ export async function cp(
         }
 
         if (srcMatch && destMatch) {
-          await copyDirectoryRecursive(
-            srcMatch.mount.stub,
-            srcMatch.relativePath,
-            destMatch.mount.stub,
-            destMatch.relativePath
-          );
+          const srcAsyncFs = getAsyncFs(srcMatch);
+          const destAsyncFs = getAsyncFs(destMatch);
+          const srcSyncFs = getSyncFs(srcMatch);
+          const destSyncFs = getSyncFs(destMatch);
+
+          if (srcAsyncFs && destAsyncFs) {
+            await copyDirectoryRecursive(
+              srcAsyncFs,
+              srcMatch.relativePath,
+              destAsyncFs,
+              destMatch.relativePath
+            );
+          } else if (srcSyncFs && destSyncFs) {
+            copyDirectorySyncRecursive(
+              srcSyncFs,
+              srcMatch.relativePath,
+              destSyncFs,
+              destMatch.relativePath
+            );
+          } else {
+            throw createFsError(
+              'ENOSYS',
+              'cp',
+              srcStr,
+              'Mixed async/sync directory copy not supported'
+            );
+          }
         } else {
           throw createFsError(
             'EXDEV',
@@ -600,21 +864,59 @@ export async function cp(
           );
         }
       } else {
-        // File copy using streaming
+        // File copy using streaming/sync
         if (srcMatch && destMatch) {
-          const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
-          const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
-          await pipeStreams(readStream, writeStream);
+          const srcAsyncFs = getAsyncFs(srcMatch);
+          const destAsyncFs = getAsyncFs(destMatch);
+          const srcSyncFs = getSyncFs(srcMatch);
+          const destSyncFs = getSyncFs(destMatch);
+
+          if (srcAsyncFs && destAsyncFs) {
+            const readStream = await srcAsyncFs.createReadStream(srcMatch.relativePath);
+            const writeStream = await destAsyncFs.createWriteStream(destMatch.relativePath);
+            await pipeStreams(readStream, writeStream);
+          } else if (srcSyncFs && destSyncFs) {
+            const data = srcSyncFs.readFileSync(srcMatch.relativePath);
+            destSyncFs.writeFileSync(destMatch.relativePath, data);
+          } else if (srcAsyncFs && destSyncFs) {
+            const stream = await srcAsyncFs.createReadStream(srcMatch.relativePath);
+            const data = await collectStream(stream);
+            destSyncFs.writeFileSync(destMatch.relativePath, data);
+          } else if (srcSyncFs && destAsyncFs) {
+            const data = srcSyncFs.readFileSync(srcMatch.relativePath);
+            const stream = await destAsyncFs.createWriteStream(destMatch.relativePath);
+            await writeToStream(stream, data);
+          } else {
+            throw createFsError('ENOSYS', 'cp', srcStr, 'Filesystem does not support copy');
+          }
         } else if (srcMatch) {
-          const readStream = await srcMatch.mount.stub.createReadStream(srcMatch.relativePath);
-          const data = await collectStream(readStream);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          await realFs.writeFile(dest as any, data);
+          const srcAsyncFs = getAsyncFs(srcMatch);
+          const srcSyncFs = getSyncFs(srcMatch);
+
+          if (srcAsyncFs) {
+            const readStream = await srcAsyncFs.createReadStream(srcMatch.relativePath);
+            const data = await collectStream(readStream);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await realFs.writeFile(dest as any, data);
+          } else if (srcSyncFs) {
+            const data = srcSyncFs.readFileSync(srcMatch.relativePath);
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await realFs.writeFile(dest as any, data);
+          }
         } else if (destMatch) {
+          const destAsyncFs = getAsyncFs(destMatch);
+          const destSyncFs = getSyncFs(destMatch);
+
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const buffer = await realFs.readFile(src as any);
-          const writeStream = await destMatch.mount.stub.createWriteStream(destMatch.relativePath);
-          await writeToStream(writeStream, new Uint8Array(buffer));
+          const data = new Uint8Array(buffer);
+
+          if (destAsyncFs) {
+            const writeStream = await destAsyncFs.createWriteStream(destMatch.relativePath);
+            await writeToStream(writeStream, data);
+          } else if (destSyncFs) {
+            destSyncFs.writeFileSync(destMatch.relativePath, data);
+          }
         }
       }
       return;
@@ -632,8 +934,19 @@ export async function access(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
       // Derive from stat - just check if it exists
-      const s = await match.mount.stub.stat(match.relativePath);
+      let s: Stat | null;
+      if (asyncFs) {
+        s = await asyncFs.stat(match.relativePath);
+      } else if (syncFs) {
+        s = syncFs.statSync(match.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'access', pathStr, 'Filesystem does not support stat');
+      }
+
       if (!s) {
         throw createFsError('ENOENT', 'access', pathStr);
       }
@@ -652,9 +965,19 @@ export async function truncate(
     const match = findMount(pathStr);
     if (match) {
       const length = len ?? 0;
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
 
-      // Derive truncate using streams
-      const srcStat = await match.mount.stub.stat(match.relativePath);
+      // Get source stat
+      let srcStat: Stat | null;
+      if (asyncFs) {
+        srcStat = await asyncFs.stat(match.relativePath);
+      } else if (syncFs) {
+        srcStat = syncFs.statSync(match.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'truncate', pathStr, 'Filesystem does not support stat');
+      }
+
       if (!srcStat) {
         throw createFsError('ENOENT', 'truncate', pathStr);
       }
@@ -663,27 +986,45 @@ export async function truncate(
       }
 
       let newData: Uint8Array;
-      if (length === 0) {
-        // Truncate to empty
-        newData = new Uint8Array(0);
-      } else if (length >= srcStat.size) {
-        // Extend with zeros
-        const readStream = await match.mount.stub.createReadStream(match.relativePath);
-        const existingData = await collectStream(readStream);
-        newData = new Uint8Array(length);
-        newData.set(existingData, 0);
-        // Rest is already zeros
-      } else {
-        // Truncate to smaller size - read only what we need
-        const readStream = await match.mount.stub.createReadStream(match.relativePath, {
-          start: 0,
-          end: length - 1,
-        });
-        newData = await collectStream(readStream);
-      }
 
-      const writeStream = await match.mount.stub.createWriteStream(match.relativePath);
-      await writeToStream(writeStream, newData);
+      if (asyncFs) {
+        if (length === 0) {
+          // Truncate to empty
+          newData = new Uint8Array(0);
+        } else if (length >= srcStat.size) {
+          // Extend with zeros
+          const readStream = await asyncFs.createReadStream(match.relativePath);
+          const existingData = await collectStream(readStream);
+          newData = new Uint8Array(length);
+          newData.set(existingData, 0);
+          // Rest is already zeros
+        } else {
+          // Truncate to smaller size - read only what we need
+          const readStream = await asyncFs.createReadStream(match.relativePath, {
+            start: 0,
+            end: length - 1,
+          });
+          newData = await collectStream(readStream);
+        }
+
+        const writeStream = await asyncFs.createWriteStream(match.relativePath);
+        await writeToStream(writeStream, newData);
+      } else if (syncFs) {
+        if (length === 0) {
+          // Truncate to empty
+          newData = new Uint8Array(0);
+        } else if (length >= srcStat.size) {
+          // Extend with zeros
+          const existingData = syncFs.readFileSync(match.relativePath);
+          newData = new Uint8Array(length);
+          newData.set(existingData, 0);
+        } else {
+          // Truncate to smaller size
+          const existingData = syncFs.readFileSync(match.relativePath);
+          newData = existingData.slice(0, length);
+        }
+        syncFs.writeFileSync(match.relativePath, newData);
+      }
       return;
     }
   }
@@ -701,10 +1042,22 @@ export async function symlink(
   if (pathStr && targetStr) {
     const match = findMount(pathStr);
     if (match) {
-      if (!match.mount.stub.symlink) {
-        throw createFsError('ENOSYS', 'symlink', pathStr, 'symlink not supported');
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      if (asyncFs) {
+        if (!asyncFs.symlink) {
+          throw createFsError('ENOSYS', 'symlink', pathStr, 'symlink not supported');
+        }
+        return asyncFs.symlink(match.relativePath, targetStr);
+      } else if (syncFs) {
+        if (!syncFs.symlinkSync) {
+          throw createFsError('ENOSYS', 'symlink', pathStr, 'symlink not supported');
+        }
+        return syncFs.symlinkSync(match.relativePath, targetStr);
+      } else {
+        throw createFsError('ENOSYS', 'symlink', pathStr, 'Filesystem does not support symlink');
       }
-      return match.mount.stub.symlink(match.relativePath, targetStr);
     }
   }
   return realFs.symlink(target, path, type);
@@ -718,10 +1071,23 @@ export async function readlink(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
-      if (!match.mount.stub.readlink) {
-        throw createFsError('ENOSYS', 'readlink', pathStr, 'readlink not supported');
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
+      let target: string;
+      if (asyncFs) {
+        if (!asyncFs.readlink) {
+          throw createFsError('ENOSYS', 'readlink', pathStr, 'readlink not supported');
+        }
+        target = await asyncFs.readlink(match.relativePath);
+      } else if (syncFs) {
+        if (!syncFs.readlinkSync) {
+          throw createFsError('ENOSYS', 'readlink', pathStr, 'readlink not supported');
+        }
+        target = syncFs.readlinkSync(match.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'readlink', pathStr, 'Filesystem does not support readlink');
       }
-      const target = await match.mount.stub.readlink(match.relativePath);
 
       const encoding =
         typeof options === 'string'
@@ -772,9 +1138,20 @@ export async function utimes(
   if (pathStr) {
     const match = findMount(pathStr);
     if (match) {
+      const asyncFs = getAsyncFs(match);
+      const syncFs = getSyncFs(match);
+
       // utimes is not supported on mounted filesystems
       // Just verify the file exists
-      const s = await match.mount.stub.stat(match.relativePath);
+      let s: Stat | null;
+      if (asyncFs) {
+        s = await asyncFs.stat(match.relativePath);
+      } else if (syncFs) {
+        s = syncFs.statSync(match.relativePath);
+      } else {
+        throw createFsError('ENOSYS', 'utimes', pathStr, 'Filesystem does not support stat');
+      }
+
       if (!s) {
         throw createFsError('ENOENT', 'utimes', pathStr);
       }

@@ -634,4 +634,248 @@ describe('worker-fs-mount integration tests', () => {
       });
     });
   });
+
+  // ============================================
+  // LocalDOFilesystem tests (sync fs with sync-only mount)
+  // Tests sync node:fs methods with LocalDOFilesystem inside a DO
+  // ============================================
+  describe('LocalDOFilesystem (sync fs)', () => {
+    beforeEach(async () => {
+      await workerFetch('/local-do/reset', { doId: 'test-local-do' });
+    });
+
+    describe('sync file operations', () => {
+      it('should writeFileSync and readFileSync', async () => {
+        const writeRes = await workerFetch('/local-do/writeFileSync', {
+          path: '/hello.txt',
+          content: 'Hello, Sync World!',
+        });
+        const writeData = (await writeRes.json()) as any;
+        expect(writeData.ok).toBe(true);
+
+        const readRes = await workerFetch('/local-do/readFileSync', { path: '/hello.txt' });
+        const readData = (await readRes.json()) as any;
+        expect(readData.ok).toBe(true);
+        expect(readData.content).toBe('Hello, Sync World!');
+      });
+
+      it('should statSync file', async () => {
+        await workerFetch('/local-do/writeFileSync', { path: '/file.txt', content: 'content' });
+
+        const res = await workerFetch('/local-do/statSync', { path: '/file.txt' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.stat.type).toBe('file');
+        expect(data.stat.size).toBe(7);
+      });
+
+      it('should existsSync return true for existing file', async () => {
+        await workerFetch('/local-do/writeFileSync', { path: '/exists.txt', content: 'data' });
+
+        const res = await workerFetch('/local-do/existsSync', { path: '/exists.txt' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.exists).toBe(true);
+      });
+
+      it('should existsSync return false for non-existent file', async () => {
+        const res = await workerFetch('/local-do/existsSync', { path: '/nonexistent.txt' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.exists).toBe(false);
+      });
+    });
+
+    describe('sync directory operations', () => {
+      it('should mkdirSync and readdirSync', async () => {
+        const mkdirRes = await workerFetch('/local-do/mkdirSync', { path: '/mydir' });
+        expect(((await mkdirRes.json()) as any).ok).toBe(true);
+
+        await workerFetch('/local-do/writeFileSync', { path: '/mydir/a.txt', content: '' });
+        await workerFetch('/local-do/writeFileSync', { path: '/mydir/b.txt', content: '' });
+
+        const res = await workerFetch('/local-do/readdirSync', { path: '/mydir' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.entries).toHaveLength(2);
+        expect(data.entries.map((e: any) => e.name)).toContain('a.txt');
+        expect(data.entries.map((e: any) => e.name)).toContain('b.txt');
+      });
+
+      it('should mkdirSync with recursive option', async () => {
+        const res = await workerFetch('/local-do/mkdirSync', {
+          path: '/a/b/c',
+          options: { recursive: true },
+        });
+        expect(((await res.json()) as any).ok).toBe(true);
+
+        const statRes = await workerFetch('/local-do/statSync', { path: '/a/b/c' });
+        const statData = (await statRes.json()) as any;
+        expect(statData.stat.type).toBe('directory');
+      });
+    });
+
+    describe('sync remove operations', () => {
+      it('should rmSync file', async () => {
+        await workerFetch('/local-do/writeFileSync', { path: '/file.txt', content: 'data' });
+
+        const rmRes = await workerFetch('/local-do/rmSync', { path: '/file.txt' });
+        expect(((await rmRes.json()) as any).ok).toBe(true);
+
+        const existsRes = await workerFetch('/local-do/existsSync', { path: '/file.txt' });
+        expect(((await existsRes.json()) as any).exists).toBe(false);
+      });
+
+      it('should rmSync directory recursively', async () => {
+        await workerFetch('/local-do/mkdirSync', { path: '/dir' });
+        await workerFetch('/local-do/writeFileSync', { path: '/dir/file.txt', content: 'data' });
+
+        const rmRes = await workerFetch('/local-do/rmSync', {
+          path: '/dir',
+          options: { recursive: true },
+        });
+        expect(((await rmRes.json()) as any).ok).toBe(true);
+
+        const existsRes = await workerFetch('/local-do/existsSync', { path: '/dir' });
+        expect(((await existsRes.json()) as any).exists).toBe(false);
+      });
+
+      it('should unlinkSync file', async () => {
+        await workerFetch('/local-do/writeFileSync', { path: '/file.txt', content: 'data' });
+
+        const unlinkRes = await workerFetch('/local-do/unlinkSync', { path: '/file.txt' });
+        expect(((await unlinkRes.json()) as any).ok).toBe(true);
+
+        const existsRes = await workerFetch('/local-do/existsSync', { path: '/file.txt' });
+        expect(((await existsRes.json()) as any).exists).toBe(false);
+      });
+    });
+
+    describe('sync symlink operations', () => {
+      it('should symlinkSync and readlinkSync', async () => {
+        await workerFetch('/local-do/writeFileSync', { path: '/target.txt', content: 'target' });
+
+        const symlinkRes = await workerFetch('/local-do/symlinkSync', {
+          linkPath: '/link.txt',
+          targetPath: '/target.txt',
+        });
+        expect(((await symlinkRes.json()) as any).ok).toBe(true);
+
+        const readlinkRes = await workerFetch('/local-do/readlinkSync', { path: '/link.txt' });
+        const data = (await readlinkRes.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.target).toBe('/target.txt');
+      });
+
+      it('should read through symlink with readFileSync', async () => {
+        await workerFetch('/local-do/writeFileSync', { path: '/target.txt', content: 'target content' });
+        await workerFetch('/local-do/symlinkSync', {
+          linkPath: '/link.txt',
+          targetPath: '/target.txt',
+        });
+
+        const res = await workerFetch('/local-do/readFileSync', { path: '/link.txt' });
+        const data = (await res.json()) as any;
+        expect(data.content).toBe('target content');
+      });
+    });
+  });
+
+  // ============================================
+  // Async with sync-only mount tests
+  // Tests that async fs methods fall back to sync methods when using sync-only mounts
+  // ============================================
+  describe('Async fs with sync-only mount (fallback)', () => {
+    beforeEach(async () => {
+      await workerFetch('/async-sync/reset', { doId: 'test-async-sync' });
+    });
+
+    describe('async file operations with sync fallback', () => {
+      it('should writeFile and readFile (async) with sync-only mount', async () => {
+        const writeRes = await workerFetch('/async-sync/writeFile', {
+          path: '/hello.txt',
+          content: 'Hello via async API!',
+        });
+        const writeData = (await writeRes.json()) as any;
+        expect(writeData.ok).toBe(true);
+
+        const readRes = await workerFetch('/async-sync/readFile', { path: '/hello.txt' });
+        const readData = (await readRes.json()) as any;
+        expect(readData.ok).toBe(true);
+        expect(readData.content).toBe('Hello via async API!');
+      });
+
+      it('should stat (async) with sync-only mount', async () => {
+        await workerFetch('/async-sync/writeFile', { path: '/file.txt', content: 'content' });
+
+        const res = await workerFetch('/async-sync/stat', { path: '/file.txt' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.stat.type).toBe('file');
+        expect(data.stat.size).toBe(7);
+      });
+
+      it('should return null stat for non-existent path', async () => {
+        const res = await workerFetch('/async-sync/stat', { path: '/nonexistent' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.stat).toBeNull();
+      });
+    });
+
+    describe('async directory operations with sync fallback', () => {
+      it('should mkdir and readdir (async) with sync-only mount', async () => {
+        const mkdirRes = await workerFetch('/async-sync/mkdir', { path: '/mydir' });
+        expect(((await mkdirRes.json()) as any).ok).toBe(true);
+
+        await workerFetch('/async-sync/writeFile', { path: '/mydir/a.txt', content: '' });
+        await workerFetch('/async-sync/writeFile', { path: '/mydir/b.txt', content: '' });
+
+        const res = await workerFetch('/async-sync/readdir', { path: '/mydir' });
+        const data = (await res.json()) as any;
+        expect(data.ok).toBe(true);
+        expect(data.entries).toHaveLength(2);
+        expect(data.entries.map((e: any) => e.name)).toContain('a.txt');
+        expect(data.entries.map((e: any) => e.name)).toContain('b.txt');
+      });
+
+      it('should mkdir with recursive option (async) with sync-only mount', async () => {
+        const res = await workerFetch('/async-sync/mkdir', {
+          path: '/a/b/c',
+          options: { recursive: true },
+        });
+        expect(((await res.json()) as any).ok).toBe(true);
+
+        const statRes = await workerFetch('/async-sync/stat', { path: '/a/b/c' });
+        const statData = (await statRes.json()) as any;
+        expect(statData.stat.type).toBe('directory');
+      });
+    });
+
+    describe('async remove operations with sync fallback', () => {
+      it('should rm (async) with sync-only mount', async () => {
+        await workerFetch('/async-sync/writeFile', { path: '/file.txt', content: 'data' });
+
+        const rmRes = await workerFetch('/async-sync/rm', { path: '/file.txt' });
+        expect(((await rmRes.json()) as any).ok).toBe(true);
+
+        const statRes = await workerFetch('/async-sync/stat', { path: '/file.txt' });
+        expect(((await statRes.json()) as any).stat).toBeNull();
+      });
+
+      it('should rm directory recursively (async) with sync-only mount', async () => {
+        await workerFetch('/async-sync/mkdir', { path: '/dir' });
+        await workerFetch('/async-sync/writeFile', { path: '/dir/file.txt', content: 'data' });
+
+        const rmRes = await workerFetch('/async-sync/rm', {
+          path: '/dir',
+          options: { recursive: true },
+        });
+        expect(((await rmRes.json()) as any).ok).toBe(true);
+
+        const statRes = await workerFetch('/async-sync/stat', { path: '/dir' });
+        expect(((await statRes.json()) as any).stat).toBeNull();
+      });
+    });
+  });
 });

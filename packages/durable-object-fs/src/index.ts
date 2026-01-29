@@ -514,3 +514,6 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
     return entry.symlink_target;
   }
 }
+
+// Re-export LocalDOFilesystem for sync operations
+export { LocalDOFilesystem } from './local-fs.js';

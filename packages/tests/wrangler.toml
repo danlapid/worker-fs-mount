@@ -4,14 +4,17 @@ main = "index.ts"
 compatibility_date = "2025-12-17"
 compatibility_flags = ["nodejs_compat"]
 
-# Alias node:fs/promises to our mount-aware implementation
+# Alias node:fs/promises and node:fs to our mount-aware implementations
 [alias]
 "node:fs/promises" = "worker-fs-mount/fs"
+"node:fs" = "worker-fs-mount/fs-sync"
 
-# SQLite migration for the Durable Object (accessed via ctx.exports)
+# SQLite migration for Durable Objects (accessed via ctx.exports)
+# DurableObjectFilesystem - for async tests (/do/*)
+# TestDurableObjectFilesystem - for sync tests (/local-do/*, /async-sync/*)
 [[migrations]]
 tag = "v1"
-new_sqlite_classes = ["DurableObjectFilesystem"]
+new_sqlite_classes = ["DurableObjectFilesystem", "TestDurableObjectFilesystem"]
 
 # R2 bucket for R2Filesystem tests
 [[r2_buckets]]
