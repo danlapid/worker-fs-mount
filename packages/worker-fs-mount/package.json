@@ -1,6 +1,6 @@
 {
   "name": "worker-fs-mount",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Mount WorkerEntrypoints as virtual filesystems in Cloudflare Workers",
   "type": "module",
   "exports": {

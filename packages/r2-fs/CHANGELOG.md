@@ -1,5 +1,12 @@
 # r2-fs
 
+## 0.1.2
+
+### Patch Changes
+
+- Updated dependencies [[`2e79e3f`](https://github.com/danlapid/worker-fs-mount/commit/2e79e3fdcaf0b7b70619c88dd01f5a3bb54052b3)]:
+  - worker-fs-mount@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes
