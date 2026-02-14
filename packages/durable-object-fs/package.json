@@ -1,6 +1,6 @@
 {
   "name": "durable-object-fs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "SQLite-backed filesystem Durable Object for Cloudflare Workers",
   "type": "module",
   "exports": {

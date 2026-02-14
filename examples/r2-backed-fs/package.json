@@ -9,8 +9,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "worker-fs-mount": "^0.1.1",
-    "r2-fs": "^0.1.1"
+    "worker-fs-mount": "^0.1.2",
+    "r2-fs": "^0.1.2"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",
