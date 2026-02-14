@@ -11,6 +11,7 @@
     "worker-fs-mount-tests",
     "memory-fs",
     "durable-object-backed-fs-example",
-    "r2-backed-fs-example"
+    "r2-backed-fs-example",
+    "sync-do-fs-example"
   ]
 }

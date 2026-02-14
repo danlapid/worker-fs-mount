@@ -20,7 +20,7 @@
     "check": "biome check .",
     "check:fix": "biome check --write .",
     "changeset": "changeset",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && pnpm install --no-frozen-lockfile",
     "release": "pnpm build && pnpm test && changeset publish",
     "ci:publish": "pnpm build && node scripts/publish.mjs"
   },
