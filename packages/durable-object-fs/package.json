@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./local": {
+      "types": "./dist/local-fs.d.ts",
+      "default": "./dist/local-fs.js"
     }
   },
   "files": [

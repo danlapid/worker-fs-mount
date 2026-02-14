@@ -56,6 +56,25 @@ importers:
         specifier: ^4.56.0
         version: 4.56.0(@cloudflare/workers-types@4.20251225.0)
 
+  examples/sync-do-fs:
+    dependencies:
+      durable-object-fs:
+        specifier: workspace:*
+        version: link:../../packages/durable-object-fs
+      worker-fs-mount:
+        specifier: workspace:*
+        version: link:../../packages/worker-fs-mount
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.21
+        version: 22.19.3
+      typescript:
+        specifier: ^5.8.3
+        version: 5.9.3
+      wrangler:
+        specifier: ^4.56.0
+        version: 4.56.0(@cloudflare/workers-types@4.20251225.0)
+
   packages/durable-object-fs:
     devDependencies:
       '@cloudflare/workers-types':

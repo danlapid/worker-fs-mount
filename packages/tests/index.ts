@@ -8,9 +8,12 @@ import { DurableObjectFilesystem } from 'durable-object-fs';
 import { MemoryFilesystem } from 'memory-fs';
 import { R2Filesystem } from 'r2-fs';
 import { isInMountContext, isMounted, mount, withMounts } from 'worker-fs-mount';
+import { TestDurableObjectFilesystem } from './test-do.js';
 
 // Re-export classes to make them available via ctx.exports
-export { DurableObjectFilesystem, MemoryFilesystem };
+// DurableObjectFilesystem - for async DO tests (/do/*)
+// TestDurableObjectFilesystem - for sync tests (/local-do/*, /async-sync/*)
+export { DurableObjectFilesystem, TestDurableObjectFilesystem, MemoryFilesystem };
 
 // Helper to wrap async operations and catch errors properly
 async function safeCall<T>(fn: () => Promise<T>): Promise<{ result?: T; error?: string }> {
@@ -208,7 +211,7 @@ export default {
         }
 
         // ============================================
-        // DurableObject Filesystem (/do/*)
+        // DurableObject Filesystem (/do/*) - Tests async WorkerFilesystem
         // ============================================
         if (endpoint.startsWith('/do/')) {
           const doEndpoint = endpoint.slice(3); // Remove '/do' prefix
@@ -239,6 +242,52 @@ export default {
           if (response) return response;
 
           return Response.json({ error: 'Unknown R2 endpoint' }, { status: 404 });
+        }
+
+        // ============================================
+        // LocalDOFilesystem (/local-do/*) - Tests sync-only DO filesystem
+        // Uses LocalDOFilesystem directly with ctx.storage.sql
+        // ============================================
+        if (endpoint.startsWith('/local-do/')) {
+          const localDoEndpoint = endpoint.slice(9); // Remove '/local-do' prefix
+          const body = (await request.json()) as any;
+
+          const doId = body.doId ?? 'test-local-do';
+          const id = ctx.exports.TestDurableObjectFilesystem.idFromName(doId);
+          const stub = ctx.exports.TestDurableObjectFilesystem.get(id);
+
+          // Make a request to the DO to use LocalDOFilesystem inside it
+          const doResponse = await stub.fetch(
+            new Request(`http://internal/local-fs${localDoEndpoint}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+          );
+          return doResponse;
+        }
+
+        // ============================================
+        // Async with Sync-only mount (/async-sync/*) - Tests async fallback to sync
+        // Mounts sync-only LocalDOFilesystem but uses async fs methods
+        // ============================================
+        if (endpoint.startsWith('/async-sync/')) {
+          const asyncSyncEndpoint = endpoint.slice(11); // Remove '/async-sync' prefix
+          const body = (await request.json()) as any;
+
+          const doId = body.doId ?? 'test-async-sync';
+          const id = ctx.exports.TestDurableObjectFilesystem.idFromName(doId);
+          const stub = ctx.exports.TestDurableObjectFilesystem.get(id);
+
+          // Make a request to the DO to use async methods with sync-only mount
+          const doResponse = await stub.fetch(
+            new Request(`http://internal/async-with-sync${asyncSyncEndpoint}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body),
+            })
+          );
+          return doResponse;
         }
 
         // ============================================

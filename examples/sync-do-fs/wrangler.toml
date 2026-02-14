@@ -1,0 +1,16 @@
+# Example: Synchronous Filesystem in Durable Objects
+name = "sync-do-fs-example"
+main = "src/index.ts"
+compatibility_date = "2025-12-17"
+compatibility_flags = ["nodejs_compat"]
+assets = { directory = "public" }
+
+# Alias both async and sync fs modules
+[alias]
+"node:fs/promises" = "worker-fs-mount/fs"
+"node:fs" = "worker-fs-mount/fs-sync"
+
+# SQLite migration for the Durable Object
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["SyncFilesystemDO"]
