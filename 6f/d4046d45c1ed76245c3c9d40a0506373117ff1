@@ -1,0 +1,43 @@
+.changeset/emscripten-module-filesystems.md
+  s_d5dedfcaa293c8::t_3a056fab38a38f 1-8
+.changeset/normalize-published-workspace-peers.md
+  s_2427bf394889ab::t_ec49f2c8ea55d7 1-8
+packages/tests/descriptor-scenarios.ts
+  s_d5dedfcaa293c8::t_0811ee8470c63f 8,25-52
+packages/tests/index.test.ts
+  s_d5dedfcaa293c8::t_31696731bb5b57 891
+packages/worker-fs-mount/README.md
+  s_d5dedfcaa293c8::t_724f808d822d05 404-447
+packages/worker-fs-mount/emscripten-library.js
+  s_d5dedfcaa293c8::t_eed5b432dc071f 1-114
+packages/worker-fs-mount/package.json
+  s_d5dedfcaa293c8::t_6469fe82e40d47 22-27,31-32
+packages/worker-fs-mount/src/emscripten.ts
+  s_d5dedfcaa293c8::t_e67199b73b594d 1-24
+scripts/publish.mjs
+  s_2427bf394889ab::t_bac0d24d125e97 9-12,23,39,41-52,56-59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "6fd4046d45c1ed76245c3c9d40a0506373117ff1",
+  "prompts": {},
+  "sessions": {
+    "s_2427bf394889ab": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "28753db2-9693-4557-828c-5c58d097f066",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    },
+    "s_d5dedfcaa293c8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07103-f349-7710-bc05-5ce39268dba3",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}
