@@ -1,5 +1,13 @@
 # durable-object-fs
 
+## 1.0.1
+
+### Patch Changes
+
+- [#7](https://github.com/danlapid/worker-fs-mount/pull/7) [`19852eb`](https://github.com/danlapid/worker-fs-mount/commit/19852ebde9340e346c9435281eda97f168c4fb87) Thanks [@danlapid](https://github.com/danlapid)! - Pack with pnpm before npm's OIDC publish step so workspace peer dependencies are
+  converted into published versions. This lets npm consumers install the packages
+  without a workspace-protocol override.
+
 ## 1.0.0
 
 ### Minor Changes
