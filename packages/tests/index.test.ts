@@ -888,6 +888,7 @@ describe('worker-fs-mount integration tests', () => {
     });
 
     for (const scenario of [
+      'module-scope',
       'descriptors',
       'scopes',
       'lifetime',

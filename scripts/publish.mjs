@@ -6,8 +6,10 @@
  * handles OIDC authentication when running in GitHub Actions.
  */
 
-import { execSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const PACKAGES = ['packages/worker-fs-mount', 'packages/r2-fs', 'packages/durable-object-fs'];
 
@@ -18,7 +20,7 @@ function getPackageInfo(dir) {
 
 function isPublished(name, version) {
   try {
-    execSync(`npm view ${name}@${version} version`, { stdio: 'pipe' });
+    execFileSync('npm', ['view', `${name}@${version}`, 'version'], { stdio: 'pipe' });
     return true;
   } catch {
     return false;
@@ -34,15 +36,27 @@ function publish(dir) {
   }
 
   console.log(`📦 Publishing ${name}@${version}...`);
+  const staging = mkdtempSync(join(tmpdir(), 'worker-fs-publish-'));
   try {
-    execSync('npm publish --access public --provenance', {
-      cwd: dir,
-      stdio: 'inherit',
-    });
+    // pnpm resolves workspace: dependencies in the packed manifest. npm handles
+    // OIDC publishing, but publishing the source directory preserves workspace:*.
+    execFileSync('pnpm', ['pack', '--pack-destination', staging], { cwd: dir, stdio: 'inherit' });
+    const archives = readdirSync(staging).filter((name) => name.endsWith('.tgz'));
+    if (archives.length !== 1) throw new Error(`Expected one package archive for ${dir}`);
+    execFileSync(
+      'npm',
+      ['publish', join(staging, archives[0]), '--access', 'public', '--provenance'],
+      {
+        stdio: 'inherit',
+      }
+    );
     console.log(`✅ Published ${name}@${version}`);
   } catch {
     console.error(`❌ Failed to publish ${name}@${version}`);
-    process.exit(1);
+    process.exitCode = 1;
+    throw new Error(`Publishing ${name}@${version} failed`);
+  } finally {
+    rmSync(staging, { recursive: true, force: true });
   }
 }
 

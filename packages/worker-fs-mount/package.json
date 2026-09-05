@@ -19,11 +19,17 @@
     "./utils": {
       "types": "./dist/utils.d.ts",
       "default": "./dist/utils.js"
-    }
+    },
+    "./emscripten": {
+      "types": "./dist/emscripten.d.ts",
+      "default": "./dist/emscripten.js"
+    },
+    "./emscripten-library": "./emscripten-library.js"
   },
   "files": [
     "dist",
-    "src"
+    "src",
+    "emscripten-library.js"
   ],
   "scripts": {
     "build": "tsc",
