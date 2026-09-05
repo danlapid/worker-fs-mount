@@ -1,0 +1,19 @@
+packages/worker-fs-mount/package.json
+  s_d5dedfcaa293c8::t_b097fd68824cdf 22,26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "fd16a74ab3339e4bde31be9e815740713d7cd658",
+  "prompts": {},
+  "sessions": {
+    "s_d5dedfcaa293c8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07103-f349-7710-bc05-5ce39268dba3",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}
