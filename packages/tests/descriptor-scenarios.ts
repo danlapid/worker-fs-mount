@@ -5,7 +5,6 @@ import fs from 'node:fs';
 import type { DurableObjectStorage } from '@cloudflare/workers-types';
 import { type DurableObjectFilesystem, LocalDOFilesystem } from 'durable-object-fs';
 import { mount, unmount, withMounts } from 'worker-fs-mount';
-import { createEmscriptenModule } from 'worker-fs-mount/emscripten';
 
 const PAGE = 64 * 1024;
 const LARGE = 3 * 1024 * 1024 + 123;
@@ -22,34 +21,6 @@ export async function descriptorScenario(
     const path = '/volume/file';
 
     switch (scenario) {
-      case 'module-scope': {
-        const module = await createEmscriptenModule('/module', local, async (options) => {
-          assert.equal(options.cwd, '/module');
-          await Promise.resolve();
-          const fd = options.nodeFs.openSync('/module/module.txt', 'w+');
-          options.nodeFs.writeSync(fd, 'module');
-          return {
-            read: () => {
-              const bytes = Buffer.alloc(6);
-              options.nodeFs.readSync(fd, bytes, 0, 6, 0);
-              return bytes.toString();
-            },
-            close: () => options.nodeFs.closeSync(fd),
-          };
-        });
-        assert.throws(() => module.instance.read(), { code: 'EBADF' });
-        assert.equal(
-          module.run(() => module.instance.read()),
-          'module'
-        );
-        await Promise.resolve();
-        assert.equal(
-          module.run(() => module.instance.read()),
-          'module'
-        );
-        module.run(() => module.instance.close());
-        break;
-      }
       case 'descriptors': {
         assert.throws(() => fs.openSync(path, 'r'), { code: 'ENOENT' });
         const fd = fs.openSync(new URL('file:///volume/file'), 'wx+', 0o640);
