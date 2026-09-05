@@ -1,7 +1,7 @@
 // Worker entry point for integration tests
 // Tests the actual library: withMounts() + mount() + aliased node:fs/promises
 
-import type { Dirent } from 'node:fs';
+import { type Dirent, openSync } from 'node:fs';
 // This import gets aliased to worker-fs-mount/fs via wrangler.toml
 import fs from 'node:fs/promises';
 import { DurableObjectFilesystem } from 'durable-object-fs';
@@ -255,6 +255,16 @@ export default {
           const doId = body.doId ?? 'test-local-do';
           const id = ctx.exports.TestDurableObjectFilesystem.idFromName(doId);
           const stub = ctx.exports.TestDurableObjectFilesystem.get(id);
+
+          if (localDoEndpoint === '/descriptor-async-mount') {
+            mount('/mnt/async-descriptors', stub);
+            try {
+              openSync('/mnt/async-descriptors/file', 'w');
+              return Response.json({ error: 'Unexpected synchronous descriptor' });
+            } catch (error) {
+              return Response.json({ code: (error as NodeJS.ErrnoException).code });
+            }
+          }
 
           // Make a request to the DO to use LocalDOFilesystem inside it
           const doResponse = await stub.fetch(

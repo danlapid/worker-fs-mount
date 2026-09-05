@@ -1,13 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { DirEntry, Stat, WorkerFilesystem } from 'worker-fs-mount';
-import {
-  createFsError,
-  getBaseName,
-  getParentPath,
-  normalizePath,
-  resolvePath,
-} from 'worker-fs-mount/utils';
-import { type DbEntry, initializeSchema } from './schema.js';
+import { createFsError, getBaseName, getParentPath, normalizePath } from 'worker-fs-mount/utils';
+import { FILE_PAGE_SIZE, FileStore } from './file-store.js';
+import { LocalDOFilesystem } from './local-fs.js';
+import type { DbEntry } from './schema.js';
 
 /**
  * A Durable Object that implements a filesystem using SQLite storage.
@@ -47,41 +43,13 @@ import { type DbEntry, initializeSchema } from './schema.js';
  */
 export class DurableObjectFilesystem extends DurableObject implements WorkerFilesystem {
   private initialized = false;
+  private readonly files = new FileStore(this.ctx.storage);
 
   private ensureInitialized(): void {
     if (!this.initialized) {
-      initializeSchema(this.ctx.storage.sql);
+      this.files.initialize();
       this.initialized = true;
     }
-  }
-
-  /**
-   * Resolve symlinks in a path, following up to 40 levels deep.
-   * @param path - The path to resolve
-   * @param depth - Current resolution depth (for loop detection)
-   * @returns The resolved path
-   * @throws Error with ELOOP if too many symlinks
-   */
-  private resolveSymlinks(path: string, depth = 0): string {
-    if (depth > 40) {
-      throw createFsError('ELOOP', path);
-    }
-
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'symlink_target'>>(
-        'SELECT type, symlink_target FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const entry = result[0];
-    if (!entry || entry.type !== 'symlink' || !entry.symlink_target) {
-      return normalized;
-    }
-
-    const target = resolvePath(getParentPath(normalized), entry.symlink_target);
-    return this.resolveSymlinks(target, depth + 1);
   }
 
   // === Metadata Operations ===
@@ -89,33 +57,22 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
   async stat(path: string, options?: { followSymlinks?: boolean }): Promise<Stat | null> {
     this.ensureInitialized();
 
-    let normalized = normalizePath(path);
-
-    if (options?.followSymlinks !== false) {
-      try {
-        normalized = this.resolveSymlinks(normalized);
-      } catch {
-        return null;
-      }
+    let normalized: string;
+    try {
+      normalized = this.files.resolve(path, options?.followSymlinks !== false);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw error;
     }
 
     const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'size' | 'created_at' | 'modified_at'>>(
-        'SELECT type, size, created_at, modified_at FROM entries WHERE path = ?',
-        normalized
-      )
+      .exec<DbEntry>('SELECT * FROM entries WHERE path = ?', normalized)
       .toArray();
 
     const entry = result[0];
     if (!entry) return null;
 
-    return {
-      type: entry.type,
-      size: entry.size,
-      created: new Date(entry.created_at),
-      lastModified: new Date(entry.modified_at),
-      writable: true,
-    };
+    return this.files.stat(entry);
   }
 
   // === Streaming Operations ===
@@ -124,34 +81,50 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
     path: string,
     options?: { start?: number; end?: number }
   ): Promise<ReadableStream<Uint8Array>> {
-    this.ensureInitialized();
-
-    const normalized = this.resolveSymlinks(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'content'>>(
-        'SELECT type, content FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      throw createFsError('ENOENT', path);
-    }
-    if (entry.type === 'directory') {
+    const start = options?.start ?? 0;
+    if (
+      !Number.isSafeInteger(start) ||
+      start < 0 ||
+      (options?.end !== undefined && (!Number.isSafeInteger(options.end) || options.end < start))
+    )
+      throw createFsError('EINVAL', path);
+    const file = this.files.open(path, { read: true, write: false });
+    if (file.stat().type === 'directory') {
+      file.close();
       throw createFsError('EISDIR', path);
     }
-
-    const content = new Uint8Array(entry.content ?? new ArrayBuffer(0));
-    const start = options?.start ?? 0;
-    const end = options?.end !== undefined ? options.end + 1 : content.length;
-    const chunk = content.slice(start, end);
-
+    const end = Math.min(file.stat().size, options?.end === undefined ? Infinity : options.end + 1);
+    let position = start,
+      closed = false;
+    const close = () => {
+      if (!closed) {
+        closed = true;
+        file.close();
+      }
+    };
     return new ReadableStream({
-      start(controller) {
-        controller.enqueue(chunk);
-        controller.close();
+      pull(controller) {
+        try {
+          if (position >= end) {
+            close();
+            controller.close();
+            return;
+          }
+          const buffer = new Uint8Array(Math.min(FILE_PAGE_SIZE, end - position));
+          const count = file.read(buffer, position);
+          if (!count) {
+            close();
+            controller.close();
+            return;
+          }
+          position += count;
+          controller.enqueue(buffer.subarray(0, count));
+        } catch (error) {
+          close();
+          controller.error(error);
+        }
       },
+      cancel: close,
     });
   }
 
@@ -159,159 +132,34 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
     path: string,
     options?: { start?: number; flags?: 'w' | 'a' | 'r+' }
   ): Promise<WritableStream<Uint8Array>> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const parentPath = getParentPath(normalized);
-    const self = this;
-    let offset = options?.start ?? 0;
-
-    // Verify parent exists and is a directory
-    const parentResult = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type'>>('SELECT type FROM entries WHERE path = ?', parentPath)
-      .toArray();
-
-    const parent = parentResult[0];
-    if (!parent) {
-      throw createFsError('ENOENT', parentPath);
-    }
-    if (parent.type !== 'directory') {
-      throw createFsError('ENOTDIR', parentPath);
-    }
-
-    // Check existing entry
-    const existingResult = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type' | 'content' | 'created_at'>>(
-        'SELECT type, content, created_at FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const existing = existingResult[0];
-
-    if (existing?.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    // Handle different modes
-    let existingContent: Uint8Array | null = null;
-    let createdAt: number | null = null;
-    let isFirstWrite = true;
-
-    if (options?.flags === 'r+') {
-      // Read-write mode: file must exist
-      if (!existing || existing.type !== 'file') {
-        throw createFsError('ENOENT', path);
+    let position = options?.start ?? 0;
+    if (!Number.isSafeInteger(position) || position < 0) throw createFsError('EINVAL', path);
+    const flags = options?.flags ?? 'w';
+    const file = this.files.open(path, {
+      read: false,
+      write: true,
+      create: flags !== 'r+',
+      truncate: flags === 'w',
+      append: flags === 'a',
+    });
+    let closed = false;
+    const close = () => {
+      if (!closed) {
+        closed = true;
+        file.close();
       }
-      existingContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
-      createdAt = existing.created_at;
-    } else if (options?.flags === 'a') {
-      // Append mode: create if doesn't exist, set offset to end
-      if (existing && existing.type === 'file') {
-        existingContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
-        offset = existingContent.length;
-        createdAt = existing.created_at;
-      }
-    } else {
-      // Write mode (default): create or truncate
-      if (existing) {
-        createdAt = existing.created_at;
-      }
-    }
-
+    };
     return new WritableStream({
       write(chunk) {
-        let currentContent: Uint8Array;
-
-        // In write mode, first write starts fresh (truncates existing)
-        if (options?.flags !== 'r+' && options?.flags !== 'a' && isFirstWrite) {
-          currentContent = new Uint8Array(0);
-          isFirstWrite = false;
-        } else {
-          // Read current state from DB to handle multiple writes
-          const currentResult = self.ctx.storage.sql
-            .exec<Pick<DbEntry, 'content'>>(
-              'SELECT content FROM entries WHERE path = ?',
-              normalized
-            )
-            .toArray();
-
-          if (currentResult[0]?.content) {
-            currentContent = new Uint8Array(currentResult[0].content);
-          } else if (existingContent) {
-            currentContent = existingContent;
-          } else {
-            currentContent = new Uint8Array(0);
-          }
-        }
-
-        const newLength = Math.max(currentContent.length, offset + chunk.length);
-        const newContent = new Uint8Array(newLength);
-        newContent.set(currentContent, 0);
-        newContent.set(chunk, offset);
-
-        const now = Date.now();
-
-        const checkResult = self.ctx.storage.sql
-          .exec<Pick<DbEntry, 'id'>>('SELECT id FROM entries WHERE path = ?', normalized)
-          .toArray();
-
-        if (checkResult.length > 0) {
-          self.ctx.storage.sql.exec(
-            'UPDATE entries SET content = ?, size = ?, modified_at = ? WHERE path = ?',
-            newContent,
-            newContent.length,
-            now,
-            normalized
-          );
-        } else {
-          self.ctx.storage.sql.exec(
-            `INSERT INTO entries (path, parent_path, name, type, size, content, created_at, modified_at)
-             VALUES (?, ?, ?, 'file', ?, ?, ?, ?)`,
-            normalized,
-            parentPath,
-            getBaseName(normalized),
-            newContent.length,
-            newContent,
-            createdAt ?? now,
-            now
-          );
-        }
-
-        offset += chunk.length;
-      },
-      close() {
-        // Handle case where stream is closed without any writes (e.g., truncate to zero)
-        // In 'w' mode, if no writes occurred, we should create/truncate the file to empty
-        if (isFirstWrite && options?.flags !== 'r+' && options?.flags !== 'a') {
-          const now = Date.now();
-          const emptyContent = new Uint8Array(0);
-
-          const checkResult = self.ctx.storage.sql
-            .exec<Pick<DbEntry, 'id'>>('SELECT id FROM entries WHERE path = ?', normalized)
-            .toArray();
-
-          if (checkResult.length > 0) {
-            self.ctx.storage.sql.exec(
-              'UPDATE entries SET content = ?, size = 0, modified_at = ? WHERE path = ?',
-              emptyContent,
-              now,
-              normalized
-            );
-          } else {
-            self.ctx.storage.sql.exec(
-              `INSERT INTO entries (path, parent_path, name, type, size, content, created_at, modified_at)
-               VALUES (?, ?, ?, 'file', 0, ?, ?, ?)`,
-              normalized,
-              parentPath,
-              getBaseName(normalized),
-              emptyContent,
-              createdAt ?? now,
-              now
-            );
-          }
+        try {
+          position += file.write(chunk, position);
+        } catch (error) {
+          close();
+          throw error;
         }
       },
+      close,
+      abort: close,
     });
   }
 
@@ -413,39 +261,7 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
   }
 
   async rm(path: string, options?: { recursive?: boolean; force?: boolean }): Promise<void> {
-    this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const result = this.ctx.storage.sql
-      .exec<Pick<DbEntry, 'type'>>('SELECT type FROM entries WHERE path = ?', normalized)
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      if (options?.force) return;
-      throw createFsError('ENOENT', path);
-    }
-
-    if (entry.type === 'directory') {
-      // Check for children
-      const prefix = normalized === '/' ? '/' : `${normalized}/`;
-      const childrenResult = this.ctx.storage.sql
-        .exec<Pick<DbEntry, 'id'>>(
-          "SELECT id FROM entries WHERE path LIKE ? || '%' LIMIT 1",
-          prefix
-        )
-        .toArray();
-
-      if (childrenResult.length > 0) {
-        if (!options?.recursive) {
-          throw createFsError('ENOTEMPTY', path);
-        }
-        // Delete all descendants
-        this.ctx.storage.sql.exec("DELETE FROM entries WHERE path LIKE ? || '%'", prefix);
-      }
-    }
-
-    this.ctx.storage.sql.exec('DELETE FROM entries WHERE path = ?', normalized);
+    new LocalDOFilesystem(this.ctx.storage).rmSync(path, options);
   }
 
   // === Link Operations ===

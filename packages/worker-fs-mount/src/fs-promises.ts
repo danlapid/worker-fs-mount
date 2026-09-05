@@ -18,6 +18,7 @@ import type { BigIntStats, Dirent, Stats } from 'node:fs';
 // biome-ignore lint/style/useNodejsImportProtocol: intentional to avoid wrangler alias loop
 import * as nodeFs from 'fs';
 import { findMount, getAsyncFs, getSyncFs } from './registry.js';
+import { toNodeStats } from './stats.js';
 import type { DirEntry, Stat, SyncWorkerFilesystem, WorkerFilesystem } from './types.js';
 
 // Get the real fs/promises from the sync module
@@ -48,48 +49,6 @@ function createFsError(
   err.syscall = syscall;
   err.path = path;
   return err;
-}
-
-/**
- * Convert our Stat type to a Node.js Stats-like object.
- */
-function toNodeStats(s: Stat): Stats {
-  const isFile = s.type === 'file';
-  const isDir = s.type === 'directory';
-  const isSymlink = s.type === 'symlink';
-
-  const mtime = s.lastModified ?? new Date(0);
-  const birthtime = s.created ?? new Date(0);
-
-  const stats = {
-    isFile: () => isFile,
-    isDirectory: () => isDir,
-    isSymbolicLink: () => isSymlink,
-    isBlockDevice: () => false,
-    isCharacterDevice: () => false,
-    isFIFO: () => false,
-    isSocket: () => false,
-    dev: 0,
-    ino: 0,
-    mode: isDir ? 0o755 : 0o644,
-    nlink: 1,
-    uid: 0,
-    gid: 0,
-    rdev: 0,
-    size: s.size,
-    blksize: 4096,
-    blocks: Math.ceil(s.size / 512),
-    atimeMs: mtime.getTime(),
-    mtimeMs: mtime.getTime(),
-    ctimeMs: mtime.getTime(),
-    birthtimeMs: birthtime.getTime(),
-    atime: mtime,
-    mtime: mtime,
-    ctime: mtime,
-    birthtime: birthtime,
-  };
-
-  return stats as Stats;
 }
 
 /**
@@ -633,6 +592,9 @@ export async function rename(
     if (oldMatch && newMatch) {
       const asyncFs = getAsyncFs(oldMatch);
       const syncFs = getSyncFs(oldMatch);
+
+      if (!asyncFs && syncFs?.renameSync)
+        return syncFs.renameSync(oldMatch.relativePath, newMatch.relativePath);
 
       // Get source stat
       let srcStat: Stat | null;

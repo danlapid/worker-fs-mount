@@ -74,37 +74,89 @@ export default class extends WorkerEntrypoint<Env> {
 - Full `WorkerFilesystem` interface implementation
 - Persistent storage via SQLite (survives restarts)
 - Support for files, directories, and symlinks
-- Streaming read/write support
-- Atomic operations within a single request
+- Paged streaming and random-access I/O, including sparse files
+- Synchronous file descriptors inside the owning Durable Object
+- Transactional file writes, truncation, and local renames
 
 ## API
 
 The `DurableObjectFilesystem` class implements the full `WorkerFilesystem` interface. See the [worker-fs-mount README](../worker-fs-mount/README.md) for the complete API reference.
 
-## Storage
+## Synchronous access inside a Durable Object
 
-Data is stored in the Durable Object's SQLite database with the following schema:
+Alias `node:fs` to `worker-fs-mount/fs-sync` in Wrangler, then mount a
+`LocalDOFilesystem` with the **full storage object**:
 
-```sql
-CREATE TABLE entries (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  path TEXT NOT NULL UNIQUE,
-  parent_path TEXT NOT NULL,
-  name TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('file', 'directory', 'symlink')),
-  size INTEGER NOT NULL DEFAULT 0,
-  content BLOB,
-  symlink_target TEXT,
-  created_at INTEGER NOT NULL,
-  modified_at INTEGER NOT NULL
-);
+```typescript
+import { DurableObject } from 'cloudflare:workers';
+import fs from 'node:fs';
+import { LocalDOFilesystem } from 'durable-object-fs';
+import { mount, withMounts } from 'worker-fs-mount';
+
+export class MyDO extends DurableObject {
+  private readonly filesystem = new LocalDOFilesystem(this.ctx.storage);
+
+  fetch(): Response {
+    return withMounts(() => {
+      mount('/data', this.filesystem);
+      const fd = fs.openSync('/data/world.bin', 'a+');
+      try {
+        fs.writeSync(fd, new Uint8Array([1, 2, 3]));
+        return Response.json({ size: fs.fstatSync(fd).size });
+      } finally {
+        fs.closeSync(fd);
+      }
+    });
+  }
+}
 ```
 
-## Limitations
+Use a SQLite migration for your `MyDO` class. `withMounts()` isolates mounts and
+descriptors from other Durable Objects sharing the same Worker isolate.
 
-- **File size**: SQLite BLOBs can store files up to several GB, but large files (>100MB) may impact performance
-- **Streaming**: Streams buffer content in memory before writing to SQLite
-- **Concurrency**: Durable Objects are single-threaded, so concurrent access from multiple workers serializes automatically
+`LocalDOFilesystem(ctx.storage)` uses `transactionSync()` for atomic paged writes,
+truncation, and inode-preserving rename. An existing `LocalDOFilesystem(ctx.storage.sql)`
+continues to support small inline writes and reading both storage formats, including
+read-only descriptors. Writable descriptors and large writes need the full storage
+object; the SQL-only constructor reports `ENOSYS` for these operations. Its rename
+continues to use the mount library's copy/delete fallback.
+
+## Storage and large files
+
+File metadata stays in `entries`. Contents are stored in `file_pages`, keyed by
+`(entry_id, page_index)`, with each BLOB at most 64 KiB. This avoids the Durable
+Object SQLite [2 MB row limit](https://developers.cloudflare.com/durable-objects/platform/limits/).
+Partial writes update only the pages they touch. Sparse extension stores a logical
+size; missing pages read as zeroes. Truncating and extending again cannot expose
+previously truncated bytes.
+
+Existing databases are upgraded automatically. Old inline `entries.content` BLOBs
+remain readable and migrate to pages on mutation through the paged API. No export or
+manual migration is required. Older releases cannot read paged contents, so do not
+downgrade after writing with this version.
+
+`DurableObjectFilesystem` read streams produce chunks of at most 64 KiB. Write streams
+persist each supplied chunk transactionally, without accumulating the entire file.
+Opening a write stream with `w` creates or truncates immediately; aborting it retains
+already-written chunks. A stream or multi-call application operation is not one
+transaction. `LocalDOFilesystem.writeFileSync()` is atomic for the entire call when
+constructed with full storage.
+
+## Limits and semantics
+
+- `readFile` and `writeFile` still hold the caller's complete buffer in memory. Use
+  streams or descriptors for bounded-memory I/O. Available database storage, Worker
+  memory, and execution limits still apply.
+- Open handles refer to inodes: local rename, unlink, or replacement does not redirect
+  them to a new file. After unlink/replacement, populated pages are retained in memory
+  until the last handle closes; sparse holes remain unallocated. Close handles promptly
+  when deleting large files. Unlinked data and descriptors do not survive eviction.
+- Mutate files through the filesystem API. Direct changes to its SQL tables bypass
+  open-handle bookkeeping.
+- Permission bits are metadata; this package does not enforce Unix users or permissions.
+- `fsyncSync`/`fdatasyncSync` validate the handle. SQL writes use Durable Object storage
+  output gates; use `await ctx.storage.sync()` when you need an explicit asynchronous
+  durability barrier.
 
 ## License
 

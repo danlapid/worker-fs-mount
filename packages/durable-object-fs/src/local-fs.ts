@@ -1,13 +1,14 @@
 import type { SqlStorage } from '@cloudflare/workers-types';
-import type { DirEntry, Stat, SyncWorkerFilesystem } from 'worker-fs-mount';
-import {
-  createFsError,
-  getBaseName,
-  getParentPath,
-  normalizePath,
-  resolvePath,
-} from 'worker-fs-mount/utils';
-import { type DbEntry, initializeSchema } from './schema.js';
+import type {
+  DirEntry,
+  Stat,
+  SyncFileHandle,
+  SyncOpenOptions,
+  SyncWorkerFilesystem,
+} from 'worker-fs-mount';
+import { createFsError, getBaseName, getParentPath, normalizePath } from 'worker-fs-mount/utils';
+import { FileStore, type StorageSource } from './file-store.js';
+import type { DbEntry } from './schema.js';
 
 /**
  * Local synchronous filesystem for use within a Durable Object.
@@ -19,22 +20,19 @@ import { type DbEntry, initializeSchema } from './schema.js';
  * @example
  * ```typescript
  * import { DurableObject } from 'cloudflare:workers';
- * import { mount } from 'worker-fs-mount';
+ * import { mount, withMounts } from 'worker-fs-mount';
  * import { LocalDOFilesystem } from 'durable-object-fs';
  * import fs from 'node:fs';
  *
  * export class MyDO extends DurableObject {
- *   constructor(ctx: DurableObjectState, env: Env) {
- *     super(ctx, env);
- *     const localFs = new LocalDOFilesystem(ctx.storage.sql);
- *     mount('/data', localFs);
- *   }
+ *   private readonly filesystem = new LocalDOFilesystem(this.ctx.storage);
  *
- *   fetch(request: Request) {
- *     // Sync fs operations work!
- *     const config = fs.readFileSync('/data/config.json', 'utf8');
- *     fs.writeFileSync('/data/output.txt', 'processed');
- *     return new Response('OK');
+ *   fetch(): Response {
+ *     return withMounts(() => {
+ *       mount('/data', this.filesystem);
+ *       fs.writeFileSync('/data/output.txt', 'processed');
+ *       return new Response('OK');
+ *     });
  *   }
  * }
  * ```
@@ -42,11 +40,24 @@ import { type DbEntry, initializeSchema } from './schema.js';
 export class LocalDOFilesystem implements SyncWorkerFilesystem {
   private initialized = false;
 
-  constructor(private readonly sql: SqlStorage) {}
+  private readonly sql: SqlStorage;
+  private readonly files: FileStore;
+
+  constructor(storage: StorageSource) {
+    this.files = new FileStore(storage);
+    this.sql = this.files.sql;
+    if (this.files.transactional) this.renameSync = (from, to) => this.files.rename(from, to);
+  }
+
+  openFileSync(path: string, options: SyncOpenOptions): SyncFileHandle {
+    return this.files.open(path, options);
+  }
+
+  readonly renameSync?: (oldPath: string, newPath: string) => void;
 
   private ensureInitialized(): void {
     if (!this.initialized) {
-      initializeSchema(this.sql);
+      this.files.initialize();
       this.initialized = true;
     }
   }
@@ -54,30 +65,11 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
   /**
    * Resolve symlinks in a path, following up to 40 levels deep.
    * @param path - The path to resolve
-   * @param depth - Current resolution depth (for loop detection)
    * @returns The resolved path
    * @throws Error with ELOOP if too many symlinks
    */
-  private resolveSymlinks(path: string, depth = 0): string {
-    if (depth > 40) {
-      throw createFsError('ELOOP', path);
-    }
-
-    const normalized = normalizePath(path);
-    const result = this.sql
-      .exec<Pick<DbEntry, 'type' | 'symlink_target'>>(
-        'SELECT type, symlink_target FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const entry = result[0];
-    if (!entry || entry.type !== 'symlink' || !entry.symlink_target) {
-      return normalized;
-    }
-
-    const target = resolvePath(getParentPath(normalized), entry.symlink_target);
-    return this.resolveSymlinks(target, depth + 1);
+  private resolveSymlinks(path: string): string {
+    return this.files.resolve(path);
   }
 
   // === Metadata Operations ===
@@ -85,63 +77,38 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
   statSync(path: string, options?: { followSymlinks?: boolean }): Stat | null {
     this.ensureInitialized();
 
-    let normalized = normalizePath(path);
-
-    if (options?.followSymlinks !== false) {
-      try {
-        normalized = this.resolveSymlinks(normalized);
-      } catch {
-        return null;
-      }
+    let normalized: string;
+    try {
+      normalized = this.files.resolve(path, options?.followSymlinks !== false);
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return null;
+      throw error;
     }
 
     const result = this.sql
-      .exec<Pick<DbEntry, 'type' | 'size' | 'created_at' | 'modified_at'>>(
-        'SELECT type, size, created_at, modified_at FROM entries WHERE path = ?',
-        normalized
-      )
+      .exec<DbEntry>('SELECT * FROM entries WHERE path = ?', normalized)
       .toArray();
 
     const entry = result[0];
     if (!entry) return null;
 
-    return {
-      type: entry.type,
-      size: entry.size,
-      created: new Date(entry.created_at),
-      lastModified: new Date(entry.modified_at),
-      writable: true,
-    };
+    return this.files.stat(entry);
   }
 
   // === File Operations ===
 
   readFileSync(path: string): Uint8Array {
-    this.ensureInitialized();
-
-    const normalized = this.resolveSymlinks(path);
-    const result = this.sql
-      .exec<Pick<DbEntry, 'type' | 'content'>>(
-        'SELECT type, content FROM entries WHERE path = ?',
-        normalized
-      )
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      throw createFsError('ENOENT', path);
-    }
-    if (entry.type === 'directory') {
-      throw createFsError('EISDIR', path);
-    }
-
-    return new Uint8Array(entry.content ?? new ArrayBuffer(0));
+    return this.files.readFile(path);
   }
 
   writeFileSync(path: string, data: Uint8Array, options?: { flags?: 'w' | 'a' | 'r+' }): void {
+    if (this.files.transactional) {
+      this.files.writeFile(path, data, options?.flags);
+      return;
+    }
     this.ensureInitialized();
 
-    const normalized = normalizePath(path);
+    const normalized = this.resolveSymlinks(path);
     const parentPath = getParentPath(normalized);
 
     // Verify parent exists and is a directory
@@ -179,14 +146,14 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
       if (!existing || existing.type !== 'file') {
         throw createFsError('ENOENT', path);
       }
-      const existingContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
+      const existingContent = this.files.readFile(normalized);
       finalContent = new Uint8Array(Math.max(existingContent.length, data.length));
       finalContent.set(existingContent, 0);
       finalContent.set(data, 0);
     } else if (options?.flags === 'a') {
       // Append mode: create if doesn't exist, append if exists
       if (existing?.type === 'file') {
-        const existingContent = new Uint8Array(existing.content ?? new ArrayBuffer(0));
+        const existingContent = this.files.readFile(normalized);
         finalContent = new Uint8Array(existingContent.length + data.length);
         finalContent.set(existingContent, 0);
         finalContent.set(data, existingContent.length);
@@ -198,6 +165,12 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
       finalContent = data;
     }
 
+    if (finalContent.length >= 2 * 1024 * 1024) {
+      throw Object.assign(
+        new Error('ENOSYS: pass DurableObjectStorage to LocalDOFilesystem to write large files'),
+        { code: 'ENOSYS' }
+      );
+    }
     const now = Date.now();
 
     if (existing) {
@@ -322,38 +295,43 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
 
   rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void {
     this.ensureInitialized();
-
-    const normalized = normalizePath(path);
-    const result = this.sql
-      .exec<Pick<DbEntry, 'type'>>('SELECT type FROM entries WHERE path = ?', normalized)
-      .toArray();
-
-    const entry = result[0];
-    if (!entry) {
-      if (options?.force) return;
-      throw createFsError('ENOENT', path);
+    let normalized: string;
+    try {
+      normalized = this.files.resolve(path, false);
+    } catch (error) {
+      if (options?.force && error instanceof Error && 'code' in error && error.code === 'ENOENT')
+        return;
+      throw error;
     }
-
-    if (entry.type === 'directory') {
-      // Check for children
-      const prefix = normalized === '/' ? '/' : `${normalized}/`;
-      const childrenResult = this.sql
-        .exec<Pick<DbEntry, 'id'>>(
-          "SELECT id FROM entries WHERE path LIKE ? || '%' LIMIT 1",
-          prefix
+    if (normalized === '/') throw createFsError('EBUSY', path);
+    let finish = () => {};
+    const remove = () => {
+      const entry = this.files.entry(normalized);
+      if (!entry) {
+        if (options?.force) return;
+        throw createFsError('ENOENT', path);
+      }
+      const entries = this.sql
+        .exec<DbEntry>(
+          "SELECT * FROM entries WHERE path = ? OR substr(path, 1, length(?) + 1) = ? || '/'",
+          normalized,
+          normalized,
+          normalized
         )
         .toArray();
-
-      if (childrenResult.length > 0) {
-        if (!options?.recursive) {
-          throw createFsError('ENOTEMPTY', path);
-        }
-        // Delete all descendants
-        this.sql.exec("DELETE FROM entries WHERE path LIKE ? || '%'", prefix);
-      }
-    }
-
-    this.sql.exec('DELETE FROM entries WHERE path = ?', normalized);
+      if (entry.type === 'directory' && entries.length > 1 && !options?.recursive)
+        throw createFsError('ENOTEMPTY', path);
+      finish = this.files.prepareRemoval(entries);
+      this.sql.exec(
+        "DELETE FROM entries WHERE path = ? OR substr(path, 1, length(?) + 1) = ? || '/'",
+        normalized,
+        normalized,
+        normalized
+      );
+    };
+    if (this.files.transactional) this.files.atomic(remove);
+    else remove();
+    finish();
   }
 
   // === Link Operations ===

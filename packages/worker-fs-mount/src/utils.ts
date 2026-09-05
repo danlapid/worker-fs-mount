@@ -12,7 +12,11 @@ export type FsErrorCode =
   | 'ENOTDIR'
   | 'ENOTEMPTY'
   | 'EINVAL'
-  | 'ELOOP';
+  | 'ELOOP'
+  | 'EBUSY'
+  | 'EBADF'
+  | 'ENOSYS'
+  | 'EIO';
 
 /**
  * Error messages for each error code.
@@ -25,6 +29,10 @@ const ERROR_MESSAGES: Record<FsErrorCode, string> = {
   ENOTEMPTY: 'directory not empty',
   EINVAL: 'invalid argument',
   ELOOP: 'too many symbolic links',
+  EBUSY: 'resource busy or locked',
+  EBADF: 'bad file descriptor',
+  ENOSYS: 'operation not supported',
+  EIO: 'input/output error',
 };
 
 /**
@@ -35,7 +43,7 @@ const ERROR_MESSAGES: Record<FsErrorCode, string> = {
  */
 export function createFsError(code: FsErrorCode, path: string): Error {
   const message = ERROR_MESSAGES[code];
-  return new Error(`${code}: ${message}, '${path}'`);
+  return Object.assign(new Error(`${code}: ${message}, '${path}'`), { code, path });
 }
 
 /**

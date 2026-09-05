@@ -34,7 +34,7 @@ const globalMounts = new Map<string, Mount>();
 /**
  * Get the current mount registry (request-scoped or global fallback).
  */
-function getMountRegistry(): Map<string, Mount> {
+export function getMountRegistry(): Map<string, Mount> {
   return mountStorage.getStore() ?? globalMounts;
 }
 
@@ -113,7 +113,7 @@ export function withMounts<T>(fn: () => T): T {
  * mount('/mnt/storage', env.STORAGE_SERVICE);
  *
  * // Sync filesystem (local DO storage)
- * mount('/data', new LocalDOFilesystem(ctx.storage.sql));
+ * mount('/data', new LocalDOFilesystem(ctx.storage));
  * ```
  */
 export function mount(path: string, fs: MountableFilesystem): void {
