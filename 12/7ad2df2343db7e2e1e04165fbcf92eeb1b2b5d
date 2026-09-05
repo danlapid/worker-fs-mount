@@ -1,0 +1,55 @@
+.changeset/mounted-descriptors-paged-files.md
+  s_d5dedfcaa293c8::t_7c4ac3c594dbb5 1-15
+packages/durable-object-fs/README.md
+  s_d5dedfcaa293c8::t_7702f8f31b1b10 77-79,85-94,96-112,114-159
+packages/durable-object-fs/src/file-store.ts
+  s_d5dedfcaa293c8::t_64578bb8501103 1-468
+packages/durable-object-fs/src/index.ts
+  s_d5dedfcaa293c8::t_627ff6ed6c9c66 3-6,46,50,60-65,69,75,84-93,96-104,106-125,127,135-149,151,154-158,161-162,264
+packages/durable-object-fs/src/local-fs.ts
+  s_d5dedfcaa293c8::t_4d77268341a34e 2-11,23,28,30-35,43-56,60,71-72,80-85,89,95,101,105-108,111,149,156,168-173,298-304,306-319,322-334
+packages/durable-object-fs/src/schema.ts
+  s_d5dedfcaa293c8::t_18a2eb28e93621 15,38-58,73,81,85
+packages/tests/descriptor-scenarios.ts
+  s_d5dedfcaa293c8::t_c89048e10978c3 1-337
+packages/tests/index.test.ts
+  s_d5dedfcaa293c8::t_d3fa5619e22d18 884-940
+packages/tests/index.ts
+  s_d5dedfcaa293c8::t_62e7f2cd1089da 4,259-268
+packages/tests/test-do.ts
+  s_d5dedfcaa293c8::t_528f05355f368d 10,35-36,52-62
+packages/worker-fs-mount/README.md
+  s_d5dedfcaa293c8::t_c27c035b2b7ccd 331,336-348,362,365,379,389-390,400,402,410-438
+packages/worker-fs-mount/src/fd-sync.ts
+  s_d5dedfcaa293c8::t_3fb1f9aa30248f 1-300
+packages/worker-fs-mount/src/fs-promises.ts
+  s_d5dedfcaa293c8::t_abbf0643b71e34 21,596-598
+packages/worker-fs-mount/src/fs-sync.ts
+  s_d5dedfcaa293c8::t_4546b8aa33b37a 23-36,38-51,133-135,174-177,231-234,501-504
+packages/worker-fs-mount/src/index.ts
+  s_d5dedfcaa293c8::t_38b973d5c02b81 44-51
+packages/worker-fs-mount/src/registry.ts
+  s_d5dedfcaa293c8::t_5c589e74e4cbe5 37,116
+packages/worker-fs-mount/src/stats.ts
+  s_d5dedfcaa293c8::t_32ac206ff3b186 1-43
+packages/worker-fs-mount/src/types.ts
+  s_d5dedfcaa293c8::t_1a080a63f324e1 10-12,107-129,138-142
+packages/worker-fs-mount/src/utils.ts
+  s_d5dedfcaa293c8::t_d094d68abf992b 15-19,32-35,46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "127ad2df2343db7e2e1e04165fbcf92eeb1b2b5d",
+  "prompts": {},
+  "sessions": {
+    "s_d5dedfcaa293c8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07103-f349-7710-bc05-5ce39268dba3",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}
