@@ -881,4 +881,61 @@ describe('worker-fs-mount integration tests', () => {
       });
     });
   });
+  describe('mounted descriptors and paged SQLite files', () => {
+    it('rejects descriptor access to an RPC mount', async () => {
+      const res = await workerFetch('/local-do/descriptor-async-mount');
+      expect(await res.json()).toEqual({ code: 'ENOSYS' });
+    });
+
+    for (const scenario of [
+      'descriptors',
+      'scopes',
+      'lifetime',
+      'pages',
+      'legacy',
+      'rollback',
+      'streams',
+    ]) {
+      it(scenario, async () => {
+        const res = await workerFetch('/local-do/regression', {
+          doId: `regression-${scenario}-${crypto.randomUUID()}`,
+          scenario,
+        });
+        const data = (await res.json()) as { ok: boolean; error?: string };
+        expect(data.error).toBeUndefined();
+        expect(data.ok).toBe(true);
+      });
+    }
+
+    it('transfers large files through the async RPC mount', async () => {
+      const doId = `regression-rpc-large-${crypto.randomUUID()}`;
+      const content = 'paged|'.repeat(600_000);
+      const write = await workerFetch('/do/writeFile', { doId, path: '/large', content });
+      expect(await write.json()).toEqual({ ok: true, bytesWritten: content.length });
+      const append = await workerFetch('/do/writeFile', {
+        doId,
+        path: '/large',
+        content: 'tail',
+        options: { append: true },
+      });
+      expect(append.ok).toBe(true);
+      const read = await workerFetch('/do/readFile', { doId, path: '/large' });
+      expect(await read.json()).toEqual({ ok: true, content: `${content}tail` });
+    });
+
+    it('restores paged files after Durable Object eviction', async () => {
+      const doId = `regression-restart-${crypto.randomUUID()}`;
+      const before = (await (
+        await workerFetch('/local-do/regression', { doId, scenario: 'persist-write' })
+      ).json()) as { ok: boolean; bootId: string };
+      expect(before.ok).toBe(true);
+      await workerFetch('/local-do/regression', { doId, scenario: 'evict' });
+      const after = (await (
+        await workerFetch('/local-do/regression', { doId, scenario: 'persist-read' })
+      ).json()) as { ok: boolean; bootId: string; error?: string };
+      expect(after.error).toBeUndefined();
+      expect(after.ok).toBe(true);
+      expect(after.bootId).not.toBe(before.bootId);
+    });
+  });
 });

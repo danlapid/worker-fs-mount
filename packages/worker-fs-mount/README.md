@@ -328,33 +328,24 @@ Then use `LocalDOFilesystem` inside your Durable Object:
 
 ```typescript
 import { DurableObject } from 'cloudflare:workers';
-import { mount } from 'worker-fs-mount';
+import { mount, withMounts } from 'worker-fs-mount';
 import { LocalDOFilesystem } from 'durable-object-fs';
 import fs from 'node:fs';  // Aliased to worker-fs-mount/fs-sync
 
 export class MyDO extends DurableObject {
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
-    // Create and mount once in constructor - DOs are single-threaded
-    const localFs = new LocalDOFilesystem(ctx.storage.sql);
-    mount('/data', localFs);
-  }
+  private readonly filesystem = new LocalDOFilesystem(this.ctx.storage);
 
-  fetch(request: Request): Response {
-    // Synchronous fs operations work!
-    const configExists = fs.existsSync('/data/config.json');
-
-    if (!configExists) {
-      fs.mkdirSync('/data', { recursive: true });
-      fs.writeFileSync('/data/config.json', JSON.stringify({ initialized: true }));
-    }
-
-    const config = fs.readFileSync('/data/config.json', 'utf8');
-    fs.writeFileSync('/data/output.txt', 'processed');
-
-    const entries = fs.readdirSync('/data');
-
-    return Response.json({ config: JSON.parse(config), entries });
+  fetch(): Response {
+    return withMounts(() => {
+      mount('/data', this.filesystem);
+      const fd = fs.openSync('/data/log.txt', 'a+');
+      try {
+        fs.writeSync(fd, 'hello\n');
+        return Response.json({ size: fs.fstatSync(fd).size });
+      } finally {
+        fs.closeSync(fd);
+      }
+    });
   }
 }
 ```
@@ -368,10 +359,10 @@ The `mount()` function accepts both async (`WorkerFilesystem`) and sync (`SyncWo
 mount('/mnt/remote', env.STORAGE_SERVICE);
 
 // Sync filesystem (LocalDOFilesystem inside DO)
-mount('/data', new LocalDOFilesystem(ctx.storage.sql));
+mount('/data', new LocalDOFilesystem(ctx.storage));
 ```
 
-When using async `fs.promises` methods with a sync-only mount, they automatically fall back to the sync methods:
+When using the aliased `node:fs/promises` methods with a sync-only mount, they automatically fall back to the sync methods:
 
 ```typescript
 import fs from 'node:fs/promises';
@@ -385,7 +376,7 @@ await fs.readFile('/data/file.txt');  // Falls back to readFileSync internally
 To create a sync filesystem, implement `SyncWorkerFilesystem`:
 
 ```typescript
-import type { SyncWorkerFilesystem, Stat, DirEntry } from 'worker-fs-mount';
+import type { SyncWorkerFilesystem, SyncFileHandle, SyncOpenOptions, Stat, DirEntry } from 'worker-fs-mount';
 
 class MySyncFs implements SyncWorkerFilesystem {
   statSync(path: string, options?: { followSymlinks?: boolean }): Stat | null { /* ... */ }
@@ -395,6 +386,8 @@ class MySyncFs implements SyncWorkerFilesystem {
   mkdirSync(path: string, options?: { recursive?: boolean }): string | undefined { /* ... */ }
   rmSync(path: string, options?: { recursive?: boolean; force?: boolean }): void { /* ... */ }
   // Optional:
+  openFileSync?(path: string, options: SyncOpenOptions): SyncFileHandle;
+  renameSync?(oldPath: string, newPath: string): void;
   symlinkSync?(linkPath: string, targetPath: string): void;
   readlinkSync?(path: string): string;
 }
@@ -404,9 +397,9 @@ class MySyncFs implements SyncWorkerFilesystem {
 
 - **DO Context Only**: `LocalDOFilesystem` only works inside a Durable Object where `ctx.storage.sql` is available
 - **Not a WorkerEntrypoint**: `LocalDOFilesystem` operates directly on SQLite storage - it's not accessible via jsrpc
-- **No `withMounts` needed**: DOs are single-threaded, so mount once in the constructor - no request isolation required
+- **Use `withMounts`**: isolate mounts and descriptors from other DO instances sharing the same Worker isolate
 - **Use wrangler alias**: Import `node:fs` with the alias configured for best developer experience
-- **Strong Consistency**: DO serialization ensures single-threaded execution with no conflicts
+- **Storage**: pass `ctx.storage` to enable transactional paged writes and writable descriptors; see [durable-object-fs](../durable-object-fs/README.md) for SQL-only compatibility
 
 ## Constraints
 
@@ -414,9 +407,35 @@ class MySyncFs implements SyncWorkerFilesystem {
 
 Synchronous `node:fs` methods only work with filesystems that implement `SyncWorkerFilesystem` (like `LocalDOFilesystem`). Using sync methods on async-only mounts throws `ENOSYS`.
 
-### No File Descriptors
+### Synchronous file descriptors
 
-The fd-based API (`open`/`read`/`write`/`close`) is not supported. Use the high-level methods instead.
+Mounts implementing `openFileSync` support `openSync`, `closeSync`, `readSync`,
+`writeSync`, `fstatSync`, `ftruncateSync`, `fsyncSync`, `fdatasyncSync`, and `fchmodSync`
+(when the handle implements `chmod`). `readFileSync`, `writeFileSync`, and
+`appendFileSync` also accept these descriptors. Files outside mounts use the native
+Workers filesystem.
+
+This supports the descriptor I/O used by Emscripten `NODERAWFS`: numeric open flags,
+positional reads/writes, truncation, and stat modes containing POSIX file-type bits.
+String flags, byte views with offsets, append mode, and `fstatSync({ bigint: true })`
+are also supported.
+
+Descriptors belong to the current `withMounts()` context. Another context cannot use
+or close them; invalid and closed descriptors throw `EBADF`. Unmounting or replacing
+a mount does not redirect an already-open descriptor. Close each descriptor in a
+`finally` block within the context that opened it.
+
+A backend's `SyncFileHandle` owns the opened file identity. Its `read` and `write`
+methods operate on byte offsets; `write` must honor the open append flag, and
+`truncate` must zero-fill extensions. The optional `renameSync` method allows native
+rename without the default copy/delete fallback. `LocalDOFilesystem(ctx.storage)`
+implements both, including open-file lifetime across rename and unlink.
+
+Async-only RPC mounts and synchronous backends without `openFileSync` report `ENOSYS`
+for mounted descriptor opens. Callback descriptor APIs, promise `FileHandle`s, and
+Node `createReadStream`/`createWriteStream` are not mount-aware. Use the listed sync
+methods or the mounted `node:fs/promises` high-level methods; virtual descriptors
+cannot be passed to native Node APIs.
 
 ### Same-Mount Operations
 

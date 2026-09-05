@@ -7,6 +7,7 @@ import { mount, withMounts } from 'worker-fs-mount';
 // Import fs modules directly (not aliased) for testing
 import * as fsPromises from 'worker-fs-mount/fs';
 import * as fsSync from 'worker-fs-mount/fs-sync';
+import { descriptorScenario } from './descriptor-scenarios.js';
 
 // Helper to safely execute and catch errors
 function safeCall<T>(fn: () => T): { result?: T; error?: string } {
@@ -31,6 +32,8 @@ async function safeCallAsync<T>(fn: () => Promise<T>): Promise<{ result?: T; err
  * async fallback to sync functionality.
  */
 export class TestDurableObjectFilesystem extends DurableObjectFilesystem {
+  private readonly bootId = crypto.randomUUID();
+
   override async fetch(request: Request): Promise<Response> {
     // Initialize schema by calling parent's stat method
     // This ensures the SQLite tables exist for LocalDOFilesystem
@@ -45,6 +48,17 @@ export class TestDurableObjectFilesystem extends DurableObjectFilesystem {
     if (endpoint.startsWith('/local-fs/')) {
       const localFsEndpoint = endpoint.slice(9); // Remove '/local-fs' prefix
       const body = (await request.json()) as any;
+
+      if (localFsEndpoint === '/regression') {
+        if (body.scenario === 'evict') this.ctx.abort('Persistence test eviction');
+        try {
+          await descriptorScenario(body.scenario, this.ctx.storage, this);
+          await this.ctx.storage.sync();
+          return Response.json({ ok: true, bootId: this.bootId });
+        } catch (error) {
+          return Response.json({ ok: false, error: (error as Error).stack }, { status: 500 });
+        }
+      }
 
       return withMounts(() => {
         const localFs = new LocalDOFilesystem(this.ctx.storage.sql);

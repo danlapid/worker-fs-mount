@@ -7,6 +7,9 @@ export interface Stat {
   lastModified?: Date;
   created?: Date;
   writable?: boolean;
+  mode?: number;
+  ino?: number;
+  nlink?: number;
 }
 
 /**
@@ -101,6 +104,29 @@ export interface WorkerFilesystem {
   readlink?(path: string): Promise<string>;
 }
 
+/** A backend-owned open file; positions are byte offsets. */
+export interface SyncFileHandle {
+  stat(): Stat;
+  read(buffer: Uint8Array, position: number): number;
+  write(buffer: Uint8Array, position: number): number;
+  truncate(length: number): void;
+  sync(): void;
+  close(): void;
+  chmod?(mode: number): void;
+}
+
+export interface SyncOpenOptions {
+  read: boolean;
+  write: boolean;
+  create?: boolean;
+  exclusive?: boolean;
+  truncate?: boolean;
+  append?: boolean;
+  noFollow?: boolean;
+  directory?: boolean;
+  mode?: number;
+}
+
 /**
  * Synchronous filesystem interface for local operations.
  *
@@ -109,6 +135,11 @@ export interface WorkerFilesystem {
  * such as Durable Object SQLite storage (ctx.storage.sql).
  */
 export interface SyncWorkerFilesystem {
+  /** Optional inode-preserving descriptor API. Async-only mounts cannot implement this. */
+  openFileSync?(path: string, options: SyncOpenOptions): SyncFileHandle;
+  /** Optional native rename, preserving open handles. */
+  renameSync?(oldPath: string, newPath: string): void;
+
   // === Metadata Operations ===
 
   /**
