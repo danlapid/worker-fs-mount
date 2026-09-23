@@ -895,6 +895,11 @@ describe('worker-fs-mount integration tests', () => {
       'legacy',
       'rollback',
       'streams',
+      'page-size',
+      'write-back',
+      'read-cache',
+      'statfs',
+      'mount-scope',
     ]) {
       it(scenario, async () => {
         const res = await workerFetch('/local-do/regression', {

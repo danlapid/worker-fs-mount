@@ -248,6 +248,28 @@ return withMounts(async () => {
 
 For R2, KV, service bindings, and same-worker entrypoints, prefer mounting at module level using `import { env, exports } from 'cloudflare:workers'`.
 
+### `createMountScope(): MountScope`
+
+Create a mount context that outlives one request. Mounts added inside `scope.run()`,
+and descriptors opened under them, remain available to every later `run()` on the same
+scope, and stay invisible to other scopes. Use one per Durable Object instance when
+files must stay open across requests, e.g. for a database engine:
+
+```typescript
+export class MyDO extends DurableObject {
+  private readonly scope = createMountScope();
+
+  constructor(ctx: DurableObjectState, env: Env) {
+    super(ctx, env);
+    this.scope.run(() => mount('/data', new LocalDOFilesystem(ctx.storage)));
+  }
+
+  fetch(): Response {
+    return this.scope.run(() => new Response(fs.readFileSync('/data/file.txt')));
+  }
+}
+```
+
 ### `isMounted(path): boolean`
 
 Check if a path is under any mount.
@@ -390,6 +412,7 @@ class MySyncFs implements SyncWorkerFilesystem {
   renameSync?(oldPath: string, newPath: string): void;
   symlinkSync?(linkPath: string, targetPath: string): void;
   readlinkSync?(path: string): string;
+  statfsSync?(path: string): StatFs; // Capacity for fs.statfsSync()
 }
 ```
 
@@ -420,7 +443,12 @@ positional reads/writes, truncation, and stat modes containing POSIX file-type b
 String flags, byte views with offsets, append mode, and `fstatSync({ bigint: true })`
 are also supported.
 
-Descriptors belong to the current `withMounts()` context. Another context cannot use
+`statfsSync` is routed to mounts implementing it (`LocalDOFilesystem` reports the
+Durable Object storage quota), and `truncateSync` on a descriptor-capable mount truncates
+in place instead of rewriting the file.
+
+Descriptors belong to the current `withMounts()` context (or `createMountScope()`
+scope). Another context cannot use
 or close them; invalid and closed descriptors throw `EBADF`. Unmounting or replacing
 a mount does not redirect an already-open descriptor. Close each descriptor in a
 `finally` block within the context that opened it.

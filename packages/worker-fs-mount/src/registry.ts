@@ -91,6 +91,42 @@ export function withMounts<T>(fn: () => T): T {
   return mountStorage.run(requestMounts, fn);
 }
 
+/** A reusable mount context; see {@link createMountScope}. */
+export interface MountScope {
+  /** Run `fn` with this scope's mounts and open descriptors. */
+  run<T>(fn: () => T): T;
+}
+
+/**
+ * Create a mount context that outlives a single request. Mounts added inside
+ * `scope.run()`, and descriptors opened under them, stay available to every later
+ * `run()` call on the same scope, while remaining invisible to other scopes.
+ *
+ * Use one scope per Durable Object instance when descriptors must stay open across
+ * requests (for example, a database engine holding its files open). Instances in the
+ * same isolate can then mount the same path without colliding.
+ *
+ * @example
+ * ```typescript
+ * export class MyDO extends DurableObject {
+ *   private readonly scope = createMountScope();
+ *
+ *   constructor(ctx: DurableObjectState, env: Env) {
+ *     super(ctx, env);
+ *     this.scope.run(() => mount('/data', new LocalDOFilesystem(ctx.storage)));
+ *   }
+ *
+ *   fetch(): Response {
+ *     return this.scope.run(() => new Response(fs.readFileSync('/data/file.txt')));
+ *   }
+ * }
+ * ```
+ */
+export function createMountScope(): MountScope {
+  const mounts = new Map<string, Mount>();
+  return { run: (fn) => mountStorage.run(mounts, fn) };
+}
+
 /**
  * Mount a filesystem at the specified path.
  *

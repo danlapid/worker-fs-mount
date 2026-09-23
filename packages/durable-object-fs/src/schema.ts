@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS entries (
   mode INTEGER,
   symlink_target TEXT,
   created_at INTEGER NOT NULL,
-  modified_at INTEGER NOT NULL
+  modified_at INTEGER NOT NULL,
+  page_size INTEGER
 )
 `;
 
@@ -35,20 +36,24 @@ CREATE INDEX IF NOT EXISTS idx_parent_path ON entries(parent_path)
 export function initializeSchema(sql: SqlStorage): void {
   sql.exec(CREATE_TABLE_SQL);
   sql.exec(CREATE_INDEX_SQL);
-  if (
-    !sql
+  const columns = new Set(
+    sql
       .exec<{ name: string }>('PRAGMA table_info(entries)')
       .toArray()
-      .some((c) => c.name === 'mode')
-  ) {
-    sql.exec('ALTER TABLE entries ADD COLUMN mode INTEGER');
-  }
+      .map((c) => c.name)
+  );
+  if (!columns.has('mode')) sql.exec('ALTER TABLE entries ADD COLUMN mode INTEGER');
+  // NULL means the 64 KiB pages used before page sizes were configurable.
+  if (!columns.has('page_size')) sql.exec('ALTER TABLE entries ADD COLUMN page_size INTEGER');
+  // WITHOUT ROWID stores each page once, keyed by its primary key, instead of a table
+  // row plus a separate primary key index: one row written per page instead of two.
+  // Databases created before this keep their rowid table, which works the same way.
   sql.exec(`CREATE TABLE IF NOT EXISTS file_pages (
     entry_id INTEGER NOT NULL,
     page_index INTEGER NOT NULL,
     content BLOB NOT NULL,
     PRIMARY KEY (entry_id, page_index)
-  )`);
+  ) WITHOUT ROWID`);
   sql.exec(`CREATE TRIGGER IF NOT EXISTS delete_file_pages AFTER DELETE ON entries BEGIN
     DELETE FROM file_pages WHERE entry_id = OLD.id;
   END`);
@@ -82,4 +87,6 @@ export type DbEntry = {
   symlink_target: string | null;
   created_at: number;
   modified_at: number;
+  /** Page size of a paged file; null for files created with the 64 KiB default before 1.1. */
+  page_size: number | null;
 };

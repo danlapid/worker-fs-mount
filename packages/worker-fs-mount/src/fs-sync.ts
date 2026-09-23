@@ -51,6 +51,18 @@ export {
 };
 
 /**
+ * True if `fs` really implements `name`. RPC stubs synthesize callable properties
+ * for absent methods, so a typeof check is not enough for optional methods.
+ */
+function implementsMethod(fs: object | null, name: string): boolean {
+  let owner: object | null = fs;
+  while (owner && !Object.getOwnPropertyNames(owner).includes(name)) {
+    owner = Object.getPrototypeOf(owner);
+  }
+  return owner !== null && typeof (fs as Record<string, unknown>)[name] === 'function';
+}
+
+/**
  * Extract a string path from various PathLike types.
  */
 function getPath(pathLike: unknown): string | null {
@@ -650,6 +662,16 @@ export function truncateSync(
       }
 
       const length = len ?? 0;
+      if (syncFs.openFileSync && implementsMethod(syncFs, 'openFileSync')) {
+        // Truncate in place, without rewriting the whole file.
+        const file = syncFs.openFileSync(match.relativePath, { read: false, write: true });
+        try {
+          file.truncate(length);
+        } finally {
+          file.close();
+        }
+        return;
+      }
       const srcStat = syncFs.statSync(match.relativePath);
       if (!srcStat) {
         throw createFsError('ENOENT', 'truncateSync', pathStr);
@@ -744,6 +766,50 @@ export function readlinkSync(
     }
   }
   return realFs.readlinkSync(path, options) as string | Buffer;
+}
+
+type StatFsOptions = { bigint?: boolean };
+
+export function statfsSync(path: Parameters<typeof realFs.statfsSync>[0]): realFs.StatsFs;
+export function statfsSync(
+  path: Parameters<typeof realFs.statfsSync>[0],
+  options: { bigint: true }
+): realFs.BigIntStatsFs;
+export function statfsSync(
+  path: Parameters<typeof realFs.statfsSync>[0],
+  options?: StatFsOptions
+): realFs.StatsFs | realFs.BigIntStatsFs;
+export function statfsSync(
+  path: Parameters<typeof realFs.statfsSync>[0],
+  options?: StatFsOptions
+): realFs.StatsFs | realFs.BigIntStatsFs {
+  const pathStr = getPath(path);
+  if (pathStr) {
+    const match = findMount(pathStr);
+    if (match) {
+      const syncFs = getSyncFs(match);
+      if (!syncFs?.statfsSync || !implementsMethod(syncFs, 'statfsSync')) {
+        throw createFsError('ENOSYS', 'statfsSync', pathStr, 'statfs not supported');
+      }
+      const info = syncFs.statfsSync(match.relativePath);
+      const values = {
+        type: info.type ?? 0,
+        bsize: info.bsize,
+        blocks: info.blocks,
+        bfree: info.bfree,
+        bavail: info.bavail,
+        files: info.files,
+        ffree: info.ffree,
+      };
+      if (options?.bigint) {
+        return Object.fromEntries(
+          Object.entries(values).map(([key, value]) => [key, BigInt(value)])
+        ) as unknown as realFs.BigIntStatsFs;
+      }
+      return values as realFs.StatsFs;
+    }
+  }
+  return realFs.statfsSync(path, options);
 }
 
 export function realpathSync(
@@ -883,6 +949,7 @@ export default {
   readlinkSync,
   realpathSync,
   existsSync,
+  statfsSync,
 
   // Sync methods (re-exported)
   chmodSync,

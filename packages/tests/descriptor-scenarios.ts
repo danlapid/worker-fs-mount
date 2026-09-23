@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 import fs from 'node:fs';
 import type { DurableObjectStorage } from '@cloudflare/workers-types';
 import { type DurableObjectFilesystem, LocalDOFilesystem } from 'durable-object-fs';
-import { mount, unmount, withMounts } from 'worker-fs-mount';
+import { createMountScope, mount, unmount, withMounts } from 'worker-fs-mount';
 
 const PAGE = 64 * 1024;
 const LARGE = 3 * 1024 * 1024 + 123;
@@ -167,11 +167,11 @@ export async function descriptorScenario(
       case 'pages': {
         const expected = pattern(LARGE);
         fs.writeFileSync(path, expected);
-        assert.deepEqual(fs.readFileSync(path), Buffer.from(expected));
+        assert.ok((fs.readFileSync(path) as Buffer).equals(expected));
         const fd = fs.openSync(path, 'r+');
         fs.writeSync(fd, 'boundary', PAGE - 3);
         expected.set(Buffer.from('boundary'), PAGE - 3);
-        assert.deepEqual(fs.readFileSync(path), Buffer.from(expected));
+        assert.ok((fs.readFileSync(path) as Buffer).equals(expected));
         fs.ftruncateSync(fd, PAGE + 7);
         fs.ftruncateSync(fd, PAGE * 3);
         const zeros = Buffer.alloc(PAGE * 2 - 7, 1);
@@ -215,7 +215,8 @@ export async function descriptorScenario(
         storage.sql.exec('DROP TRIGGER inline_file_pages');
         storage.sql.exec('DROP TABLE file_pages');
         storage.sql.exec('ALTER TABLE entries DROP COLUMN mode');
-        assert.deepEqual(fs.readFileSync(path), Buffer.from(bytes));
+        storage.sql.exec('ALTER TABLE entries DROP COLUMN page_size');
+        assert.ok((fs.readFileSync(path) as Buffer).equals(bytes));
         const old = legacy.openFileSync('/file', { read: true, write: false });
         const fd = fs.openSync(path, 'r+');
         fs.writeSync(fd, 'changed', PAGE - 3);
@@ -257,7 +258,7 @@ export async function descriptorScenario(
           WHEN NEW.page_index = 1 BEGIN SELECT RAISE(ABORT, 'injected page failure'); END`);
         try {
           assert.throws(() => fs.writeSync(fd, Buffer.alloc(PAGE * 3, 7)), /injected page failure/);
-          assert.deepEqual(fs.readFileSync(path), Buffer.from(expected));
+          assert.ok((fs.readFileSync(path) as Buffer).equals(expected));
           assert.equal(fs.fstatSync(fd).mtimeMs, before.mtimeMs);
           assert.throws(() => fs.writeFileSync('/volume/new', expected), /injected page failure/);
           assert.equal(fs.existsSync('/volume/new'), false);
@@ -265,7 +266,7 @@ export async function descriptorScenario(
             () => fs.writeFileSync(path, Buffer.alloc(PAGE * 3, 9)),
             /injected page failure/
           );
-          assert.deepEqual(fs.readFileSync(path), Buffer.from(expected));
+          assert.ok((fs.readFileSync(path) as Buffer).equals(expected));
         } finally {
           storage.sql.exec('DROP TRIGGER fail_page');
           fs.closeSync(fd);
@@ -278,7 +279,7 @@ export async function descriptorScenario(
             }),
           /outer rollback/
         );
-        assert.deepEqual(fs.readFileSync(path), Buffer.from(expected));
+        assert.ok((fs.readFileSync(path) as Buffer).equals(expected));
         break;
       }
       case 'streams': {
@@ -324,11 +325,222 @@ export async function descriptorScenario(
         );
         break;
       }
+      case 'page-size': {
+        const KiB = 1024;
+        const sized = new LocalDOFilesystem(storage, {
+          pageSize: (file) => (file.endsWith('.wal') ? 4 * KiB : 256 * KiB),
+        });
+        assert.throws(
+          () => new LocalDOFilesystem(storage, { pageSize: 3 * 1024 * 1024 }),
+          RangeError
+        );
+        assert.throws(() => new LocalDOFilesystem(storage, { pageSize: 1000.5 }), RangeError);
+        fs.writeFileSync('/volume/legacy', pattern(PAGE * 2 + 5)); // Default 64 KiB pages.
+        mount('/sized', sized);
+        const expected = pattern(LARGE);
+        fs.writeFileSync('/sized/db', expected);
+        fs.writeFileSync('/sized/db.wal', pattern(10 * KiB));
+        const rows = storage.sql
+          .exec<{ path: string; page_size: number | null; largest: number; pages: number }>(
+            `SELECT path, page_size, max(length(file_pages.content)) AS largest, count(*) AS pages
+             FROM entries JOIN file_pages ON entry_id = id GROUP BY id ORDER BY path`
+          )
+          .toArray();
+        assert.deepEqual(
+          rows.map((r) => [r.path, r.page_size, r.largest, r.pages]),
+          [
+            ['/db', 256 * KiB, 256 * KiB, Math.ceil(LARGE / (256 * KiB))],
+            ['/db.wal', 4 * KiB, 4 * KiB, 3],
+            ['/legacy', PAGE, PAGE, 3],
+          ]
+        );
+        assert.ok((fs.readFileSync('/sized/db') as Buffer).equals(expected));
+        // Files keep their page size: the legacy file is still read and written in 64 KiB pages.
+        const fd = fs.openSync('/sized/legacy', 'r+');
+        fs.writeSync(fd, 'boundary', PAGE - 3);
+        fs.closeSync(fd);
+        const legacy = pattern(PAGE * 2 + 5);
+        legacy.set(Buffer.from('boundary'), PAGE - 3);
+        assert.ok((fs.readFileSync('/volume/legacy') as Buffer).equals(legacy));
+        // A write covering whole pages replaces them without reading them first.
+        const before = sized.stats();
+        const db = fs.openSync('/sized/db', 'r+');
+        fs.writeSync(db, Buffer.alloc(512 * KiB, 1), 0, 512 * KiB, 256 * KiB);
+        fs.writeSync(db, Buffer.alloc(100, 2), 0, 100, 13 * 256 * KiB); // Nor do writes past the end.
+        const after = sized.stats();
+        assert.equal(after.pagesRead, before.pagesRead);
+        assert.equal(after.pagesWritten - before.pagesWritten, 3);
+        fs.writeSync(db, 'partial', 10); // A partial page write reads the page once.
+        assert.equal(sized.stats().pagesRead, after.pagesRead + 1);
+        fs.closeSync(db);
+        expected.fill(1, 256 * KiB, 768 * KiB);
+        expected.set(Buffer.from('partial'), 10);
+        const grown = new Uint8Array(13 * 256 * KiB + 100);
+        grown.set(expected);
+        grown.fill(2, 13 * 256 * KiB);
+        assert.ok((fs.readFileSync('/volume/db') as Buffer).equals(grown));
+        break;
+      }
+      case 'write-back': {
+        const events: string[] = [];
+        const buffered = new LocalDOFilesystem(storage, {
+          writeBack: { dirtyLimit: 4 * PAGE },
+          readCacheBytes: 8 * PAGE,
+          onPageIO: (event) => events.push(`${event.op} ${event.path} ${event.pages}`),
+        });
+        assert.throws(() => new LocalDOFilesystem(storage.sql, { writeBack: true }), TypeError);
+        mount('/wb', buffered);
+        const rowsOf = (file: string) =>
+          storage.sql
+            .exec<{ count: number }>(
+              'SELECT count(*) AS count FROM file_pages JOIN entries ON entry_id = id WHERE path = ?',
+              file
+            )
+            .one().count;
+        const fd = fs.openSync('/wb/log', 'w+');
+        for (let i = 0; i < 100; i++) fs.writeSync(fd, `line ${i}\n`);
+        const text = Array.from({ length: 100 }, (_, i) => `line ${i}\n`).join('');
+        assert.equal(rowsOf('/log'), 0); // Nothing reached SQLite yet.
+        assert.equal(buffered.stats().dirtyBytes, PAGE);
+        // Buffered data is visible through the descriptor, by path, and to other instances.
+        assert.equal(fs.fstatSync(fd).size, text.length);
+        assert.equal(fs.statSync('/volume/log').size, text.length);
+        assert.equal(fs.readFileSync('/volume/log', 'utf8'), text);
+        const bytes = Buffer.alloc(7);
+        fs.readSync(fd, bytes, 0, 7, 0);
+        assert.equal(bytes.toString(), 'line 0\n');
+        fs.fsyncSync(fd);
+        assert.equal(rowsOf('/log'), 1);
+        assert.deepEqual(events, ['write /log 1']);
+        assert.equal(buffered.stats().dirtyBytes, 0);
+        assert.equal(
+          storage.sql.exec<{ size: number }>("SELECT size FROM entries WHERE path = '/log'").one()
+            .size,
+          text.length
+        );
+        // Writes through a write-through instance first apply the buffered ones.
+        fs.writeSync(fd, 'X', 0);
+        const direct = fs.openSync('/volume/log', 'r+');
+        fs.writeSync(direct, 'Y', 1);
+        fs.closeSync(direct);
+        assert.equal(fs.readFileSync('/wb/log', 'utf8'), `XY${text.slice(2)}`);
+        // Exceeding the dirty limit flushes on its own.
+        fs.writeSync(fd, pattern(5 * PAGE), 0, 5 * PAGE, PAGE);
+        assert.equal(buffered.stats().dirtyBytes, 0);
+        assert.equal(rowsOf('/log'), 6);
+        // Truncate, rename and unlink with buffered writes keep every byte.
+        fs.writeSync(fd, 'tail', 6 * PAGE - 4);
+        fs.ftruncateSync(fd, 6 * PAGE - 2);
+        assert.equal(fs.statSync('/volume/log').size, 6 * PAGE - 2);
+        fs.writeSync(fd, 'renamed', 0);
+        fs.renameSync('/wb/log', '/wb/moved');
+        assert.equal(
+          (fs.readFileSync('/volume/moved') as Buffer).subarray(0, 7).toString(),
+          'renamed'
+        );
+        fs.writeSync(fd, 'unlinked', 0);
+        fs.unlinkSync('/wb/moved');
+        const detached = Buffer.alloc(8);
+        fs.readSync(fd, detached, 0, 8, 0);
+        assert.equal(detached.toString(), 'unlinked');
+        const end = Buffer.alloc(2);
+        fs.readSync(fd, end, 0, 2, 6 * PAGE - 4);
+        assert.equal(end.toString(), 'ta');
+        fs.closeSync(fd);
+        // Close flushes, and a later instance sees the data.
+        const late = fs.openSync('/wb/closed', 'w');
+        fs.writeSync(late, 'closed');
+        fs.closeSync(late);
+        assert.equal(rowsOf('/closed'), 1);
+        assert.equal(new LocalDOFilesystem(storage).readFileSync('/closed').length, 6);
+        // flush() writes everything that is buffered.
+        const open = fs.openSync('/wb/open', 'w');
+        fs.writeSync(open, 'open');
+        buffered.flush();
+        assert.equal(rowsOf('/open'), 1);
+        fs.closeSync(open);
+        break;
+      }
+      case 'read-cache': {
+        const cached = new LocalDOFilesystem(storage, { readCacheBytes: 4 * PAGE });
+        mount('/cached', cached);
+        fs.writeFileSync('/volume/file', pattern(3 * PAGE));
+        const fd = fs.openSync('/cached/file', 'r');
+        const small = Buffer.alloc(100);
+        const before = cached.stats().pagesRead;
+        for (let i = 0; i < 50; i++) fs.readSync(fd, small, 0, 100, i * 100);
+        assert.equal(cached.stats().pagesRead - before, 1);
+        // Writes through another instance invalidate cached pages.
+        fs.writeFileSync('/volume/file', Buffer.from('rewritten'), { flag: 'r+' });
+        fs.readSync(fd, small, 0, 9, 0);
+        assert.equal(small.subarray(0, 9).toString(), 'rewritten');
+        fs.truncateSync('/volume/file', 5);
+        assert.equal(fs.readSync(fd, small, 0, 100, 0), 5);
+        // A rolled back write does not leave its pages in the cache.
+        const writer = fs.openSync('/cached/file', 'r+');
+        storage.sql.exec(`CREATE TRIGGER fail_update BEFORE UPDATE ON entries
+          BEGIN SELECT RAISE(ABORT, 'injected failure'); END`);
+        try {
+          assert.throws(() => fs.writeSync(writer, 'lost', 0), /injected failure/);
+        } finally {
+          storage.sql.exec('DROP TRIGGER fail_update');
+        }
+        fs.readSync(fd, small, 0, 5, 0);
+        assert.equal(small.subarray(0, 5).toString(), 'rewri');
+        fs.closeSync(writer);
+        fs.closeSync(fd);
+        assert.ok(cached.stats().cachedBytes <= 4 * PAGE);
+        break;
+      }
+      case 'statfs': {
+        const info = fs.statfsSync('/volume');
+        assert.equal(info.bsize, 4096);
+        assert.equal(info.blocks, (10 * 1024 ** 3) / 4096);
+        assert.ok(info.bfree < info.blocks && info.bfree === info.bavail);
+        assert.equal(typeof fs.statfsSync('/volume/any', { bigint: true }).blocks, 'bigint');
+        mount('/small', new LocalDOFilesystem(storage, { capacity: 1024 * 1024 * 1024 }));
+        assert.equal(fs.statfsSync('/small').blocks, 262144);
+        // truncateSync on a descriptor-capable mount truncates in place.
+        fs.writeFileSync(path, pattern(3 * PAGE));
+        const ino = fs.statSync(path).ino;
+        fs.truncateSync(path, PAGE + 1);
+        assert.equal(fs.statSync(path).ino, ino);
+        assert.ok((fs.readFileSync(path) as Buffer).equals(pattern(PAGE + 1)));
+        break;
+      }
+      case 'mount-scope': {
+        const scope = createMountScope();
+        const other = createMountScope();
+        const fd = scope.run(() => {
+          mount('/scoped', local);
+          const fd = fs.openSync('/scoped/file', 'w+');
+          fs.writeSync(fd, 'kept open');
+          return fd;
+        });
+        await Promise.resolve();
+        // Later runs see the same mounts and descriptors; other contexts do not.
+        const bytes = Buffer.alloc(9);
+        scope.run(() => fs.readSync(fd, bytes, 0, 9, 0));
+        assert.equal(bytes.toString(), 'kept open');
+        assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
+        assert.equal(fs.existsSync('/scoped/file'), false);
+        other.run(() => {
+          assert.throws(() => fs.fstatSync(fd), { code: 'EBADF' });
+          mount('/scoped', new LocalDOFilesystem(storage)); // Same path, no collision.
+          assert.equal(fs.readFileSync('/scoped/file', 'utf8'), 'kept open');
+        });
+        await scope.run(async () => {
+          await Promise.resolve();
+          fs.closeSync(fd);
+        });
+        assert.throws(() => scope.run(() => fs.closeSync(fd)), { code: 'EBADF' });
+        break;
+      }
       case 'persist-write':
         fs.writeFileSync(path, pattern(LARGE));
         break;
       case 'persist-read':
-        assert.deepEqual(fs.readFileSync(path), Buffer.from(pattern(LARGE)));
+        assert.ok((fs.readFileSync(path) as Buffer).equals(pattern(LARGE)));
         break;
       default:
         throw new Error(`Unknown scenario: ${scenario}`);
