@@ -1,0 +1,51 @@
+.changeset/durable-object-fs-paging.md
+  s_627298ebeb3761::t_ea8dd59b91c36f 1-18
+packages/durable-object-fs/README.md
+  s_627298ebeb3761::t_5f9d08a2470e8d 79-80,126-169,173-175,178-180,206-208
+packages/durable-object-fs/src/file-store.ts
+  s_627298ebeb3761::t_a7955b8e8a07ef 12,14-18,21-75,78-91,93,99-110,116-122,124,127-155,160-174,176-177,194-208,248-253,257,260,265,270-349,352-354,361-381,383-384,392,397,401,403,407-408,411,417-424,426-427,429-445,447-449,452,462-534,537-542,547,549,552,554,557,581,586-587,593-594,605,608,611-612,634,638-640,653,661,663-665,688,690-692,708-709,712-717,742-746,748,752-753,763,765,767-769
+packages/durable-object-fs/src/index.ts
+  s_627298ebeb3761::t_8a257cf2d0e6c3 334-335,337
+packages/durable-object-fs/src/local-fs.ts
+  s_627298ebeb3761::t_f8bd9eb354c980 5,11-16,19-27,60,62-69,71,75-92,170-171,218
+packages/durable-object-fs/src/schema.ts
+  s_627298ebeb3761::t_7afdbb4c1b8f92 18-19,39-40,43-50,56,90-91
+packages/tests/descriptor-scenarios.ts
+  s_627298ebeb3761::t_7b58c7e7666adf 7,170,174,218-219,261,269,282,328-538,543
+packages/tests/index.test.ts
+  s_627298ebeb3761::t_a4e652fcd0cc68 898-902
+packages/worker-fs-mount/README.md
+  s_627298ebeb3761::t_f140932b35060a 251-272,415,446-451
+packages/worker-fs-mount/src/fs-sync.ts
+  s_627298ebeb3761::t_76d9e8118437a5 53-64,665-674,771-814,952
+packages/worker-fs-mount/src/index.ts
+  s_627298ebeb3761::t_80e0361b7c4c3f 42-50,55
+packages/worker-fs-mount/src/registry.ts
+  s_627298ebeb3761::t_e38a3bb4495cdf 94-129
+packages/worker-fs-mount/src/types.ts
+  s_dadaf0660bfcbe::t_d79dcfd8531413 15-28,167-172
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c9b9d28212d9045fae5dd000b52ac9c70e9aeb71",
+  "prompts": {},
+  "sessions": {
+    "s_627298ebeb3761": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_f31a377bbffedkJb9IAymw32gN",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    },
+    "s_dadaf0660bfcbe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8d63e3f9-8a77-4e9b-af79-b96d68a8b116",
+        "model": "claude-fable-5-1"
+      },
+      "human_author": "Dan Lapid <dlapid@cloudflare.com>"
+    }
+  }
+}
