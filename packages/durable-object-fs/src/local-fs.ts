@@ -2,13 +2,28 @@ import type { SqlStorage } from '@cloudflare/workers-types';
 import type {
   DirEntry,
   Stat,
+  StatFs,
   SyncFileHandle,
   SyncOpenOptions,
   SyncWorkerFilesystem,
 } from 'worker-fs-mount';
 import { createFsError, getBaseName, getParentPath, normalizePath } from 'worker-fs-mount/utils';
-import { FileStore, type StorageSource } from './file-store.js';
+import {
+  FileStore,
+  type FileStoreOptions,
+  type FileStoreStats,
+  type StorageSource,
+} from './file-store.js';
 import type { DbEntry } from './schema.js';
+
+/** Durable Object SQLite storage limit (paid plans). */
+const DEFAULT_CAPACITY = 10 * 1024 ** 3;
+const STATFS_BLOCK = 4096;
+
+export interface LocalDOFilesystemOptions extends FileStoreOptions {
+  /** Capacity reported by statfs, in bytes. Default 10 GiB. */
+  capacity?: number;
+}
 
 /**
  * Local synchronous filesystem for use within a Durable Object.
@@ -42,11 +57,37 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
 
   private readonly sql: SqlStorage;
   private readonly files: FileStore;
+  private readonly capacity: number;
 
-  constructor(storage: StorageSource) {
-    this.files = new FileStore(storage);
+  /**
+   * @param storage - `ctx.storage` (required for writable descriptors, large files and
+   *   write-back), or `ctx.storage.sql` for small, whole-file writes only.
+   * @param options - Paging, write-back and caching; the defaults write every change
+   *   straight to SQLite in 64 KiB pages.
+   */
+  constructor(storage: StorageSource, options: LocalDOFilesystemOptions = {}) {
+    this.files = new FileStore(storage, options);
     this.sql = this.files.sql;
+    this.capacity = options.capacity ?? DEFAULT_CAPACITY;
     if (this.files.transactional) this.renameSync = (from, to) => this.files.rename(from, to);
+  }
+
+  /** Page I/O counters for this instance, and the shared write-back and cache sizes. */
+  stats(): FileStoreStats {
+    return this.files.stats();
+  }
+
+  /** Write all buffered pages to SQLite (only needed with `writeBack`). */
+  flush(): void {
+    this.files.flush();
+  }
+
+  statfsSync(_path: string): StatFs {
+    const blocks = Math.floor(this.capacity / STATFS_BLOCK);
+    const used = Math.ceil(this.sql.databaseSize / STATFS_BLOCK);
+    const free = Math.max(0, blocks - used);
+    const files = 1_000_000;
+    return { type: 0, bsize: STATFS_BLOCK, blocks, bfree: free, bavail: free, files, ffree: files };
   }
 
   openFileSync(path: string, options: SyncOpenOptions): SyncFileHandle {
@@ -126,8 +167,8 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
 
     // Check existing entry
     const existingResult = this.sql
-      .exec<Pick<DbEntry, 'type' | 'content' | 'created_at'>>(
-        'SELECT type, content, created_at FROM entries WHERE path = ?',
+      .exec<Pick<DbEntry, 'id' | 'type' | 'content' | 'created_at'>>(
+        'SELECT id, type, content, created_at FROM entries WHERE path = ?',
         normalized
       )
       .toArray();
@@ -174,6 +215,7 @@ export class LocalDOFilesystem implements SyncWorkerFilesystem {
     const now = Date.now();
 
     if (existing) {
+      this.files.invalidate(existing.id);
       this.sql.exec(
         'UPDATE entries SET content = ?, size = ?, modified_at = ? WHERE path = ?',
         finalContent,

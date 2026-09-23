@@ -39,11 +39,20 @@
  */
 
 // Export mount API (keep minimal public surface)
-export { isInMountContext, isMounted, mount, unmount, withMounts } from './registry.js';
+export {
+  createMountScope,
+  isInMountContext,
+  isMounted,
+  type MountScope,
+  mount,
+  unmount,
+  withMounts,
+} from './registry.js';
 // Export types needed for implementing filesystems
 export type {
   DirEntry,
   Stat,
+  StatFs,
   SyncFileHandle,
   SyncOpenOptions,
   SyncWorkerFilesystem,

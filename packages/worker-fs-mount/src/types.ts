@@ -13,6 +13,20 @@ export interface Stat {
 }
 
 /**
+ * Filesystem capacity information, as returned by statfs(2).
+ * Counts are in units of `bsize` bytes, except `files`/`ffree` (inodes).
+ */
+export interface StatFs {
+  type?: number;
+  bsize: number;
+  blocks: number;
+  bfree: number;
+  bavail: number;
+  files: number;
+  ffree: number;
+}
+
+/**
  * A directory entry returned by readdir.
  */
 export interface DirEntry {
@@ -149,6 +163,12 @@ export interface SyncWorkerFilesystem {
    * @returns Stat object or null if not found
    */
   statSync(path: string, options?: { followSymlinks?: boolean }): Stat | null;
+
+  /**
+   * Report filesystem capacity synchronously (optional).
+   * @param path - Path relative to mount point
+   */
+  statfsSync?(path: string): StatFs;
 
   // === File Operations ===
 

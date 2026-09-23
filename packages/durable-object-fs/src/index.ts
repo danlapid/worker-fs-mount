@@ -331,5 +331,7 @@ export class DurableObjectFilesystem extends DurableObject implements WorkerFile
   }
 }
 
+export type { FileStoreOptions, FileStoreStats, PageIOEvent } from './file-store.js';
+export { FILE_PAGE_SIZE, MAX_PAGE_SIZE } from './file-store.js';
 // Re-export LocalDOFilesystem for sync operations
-export { LocalDOFilesystem } from './local-fs.js';
+export { LocalDOFilesystem, type LocalDOFilesystemOptions } from './local-fs.js';
