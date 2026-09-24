@@ -23,6 +23,13 @@ export async function descriptorScenario(
     switch (scenario) {
       case 'descriptors': {
         assert.throws(() => fs.openSync(path, 'r'), { code: 'ENOENT' });
+        // Callers such as Emscripten's FS pass st_mode with type bits set; Node
+        // masks a numeric mode to its permission bits rather than rejecting it.
+        const typed = fs.openSync('/volume/typed', 'wx', 0o100600);
+        assert.equal(fs.fstatSync(typed).mode & 0o7777, 0o600);
+        fs.closeSync(typed);
+        fs.unlinkSync('/volume/typed');
+        assert.throws(() => fs.openSync('/volume/typed', 'wx', -1), { code: 'ERR_OUT_OF_RANGE' });
         const fd = fs.openSync(new URL('file:///volume/file'), 'wx+', 0o640);
         assert.equal(fs.fstatSync(fd).mode & 0o170000, 0o100000);
         assert.equal(fs.fstatSync(fd).mode & 0o777, 0o640);

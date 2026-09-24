@@ -45,9 +45,11 @@ function integer(value: number, name: string, max = Number.MAX_SAFE_INTEGER): nu
   return value;
 }
 
+// Like Node's parseFileMode: a numeric mode keeps only its permission bits, so
+// callers passing a full st_mode (e.g. S_IFREG | 0o644) are accepted.
 function permissionMode(mode: number | string): number {
   if (typeof mode === 'string' && !/^[0-7]+$/.test(mode)) fail('ERR_INVALID_ARG_VALUE', 'mode');
-  return integer(typeof mode === 'string' ? Number.parseInt(mode, 8) : mode, 'mode', 0o7777);
+  return integer(typeof mode === 'string' ? Number.parseInt(mode, 8) : mode, 'mode') & 0o7777;
 }
 
 function options(flags: string | number, mode: number | string): SyncOpenOptions {
